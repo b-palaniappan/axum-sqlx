@@ -1,11 +1,11 @@
-use axum::{Json, Router};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use sqlx::{Error, PgPool};
 use sqlx::postgres::PgPoolOptions;
+use sqlx::{Error, PgPool};
 use tracing::{error, info, warn};
 
 #[tokio::main]
@@ -29,9 +29,7 @@ async fn main() {
         .unwrap();
 
     // build our application with a route
-    let app = Router::new()
-        .route("/", get(handler_json))
-        .with_state(pool);
+    let app = Router::new().route("/", get(handler_json)).with_state(pool);
 
     // run it
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -51,18 +49,24 @@ async fn handler_json(State(pool): State<PgPool>, headers: HeaderMap) -> Respons
             Ok(value) => value,
             Err(_) => {
                 warn!("Failed to convert header value to string");
-                return Response::builder().status(StatusCode::BAD_REQUEST).body("Invalid header value".into()).unwrap();
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body("Invalid header value".into())
+                    .unwrap();
             }
         },
         None => {
             warn!("Header 'x-server-version' not found");
-            return Response::builder().status(StatusCode::BAD_REQUEST).body("Missing header 'x-server-version'".into()).unwrap();
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body("Missing header 'x-server-version'".into())
+                .unwrap();
         }
     };
     info!("Header Value -> {}", header_value);
 
     // Make a simple query to return the given parameter (use a question mark `?` instead of `$1` for MySQL)
-    let response: Result<(String, ), Error> =
+    let response: Result<(String,), Error> =
         sqlx::query_as("SELECT 'Hello'").fetch_one(&pool).await;
     match response {
         Ok(r) => info!("DB Response -> {}", r.0),
@@ -76,5 +80,6 @@ async fn handler_json(State(pool): State<PgPool>, headers: HeaderMap) -> Respons
             message: "Hello".to_string(),
             status: "Success".to_string(),
         }),
-    ).into_response()
+    )
+        .into_response()
 }

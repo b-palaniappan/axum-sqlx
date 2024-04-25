@@ -15,8 +15,8 @@ panic = "abort"
 
 [dependencies]
 # core axum library
-axum = { version = "0.7.5" }
-dotenvy = "0.15.7"
+axum = { version = "^0" }
+dotenvy = "^0"
 
 # JSON parser
 serde = { version = "^1.0", features = ["derive"] }
@@ -29,5 +29,5 @@ sqlx = { version = "^0", features = ["postgres", "runtime-tokio", "chrono", "jso
 tokio = { version = "^1.0", features = ["macros", "rt-multi-thread"] }
 
 # Logging and tracing
-tracing = "0.1.40"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+tracing = "^0"
+tracing-subscriber = { version = "^0", features = ["env-filter"] }

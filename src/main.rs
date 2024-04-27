@@ -1,14 +1,15 @@
 use std::env;
 use std::net::SocketAddr;
 
-use axum::{Json, Router};
 use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use sqlx::{Error, PgPool};
 use sqlx::postgres::PgPoolOptions;
+use sqlx::types::chrono::{DateTime, Utc};
+use sqlx::{Error, FromRow, PgPool};
 use tracing::{error, info, warn};
 
 #[tokio::main]
@@ -34,10 +35,16 @@ async fn main() {
         })
         .unwrap();
 
+    // Trigger SQLx migration.
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("Failed to migrate database");
+
     // build our application with a route
     let app = Router::new()
         .route("/", get(handler_json))
-        .route("/users", post(handler_create_user))
+        .route("/users", post(handler_create_user).get(get_users))
         .with_state(pool);
 
     // run it
@@ -104,13 +111,15 @@ async fn handler_create_user(
 
 async fn create_user(pool: PgPool, user_request: UserRequest) -> Response {
     let result = sqlx::query!(
-        "INSERT INTO \"user\" (first_name, last_name, email) VALUES ($1, $2, $3) RETURNING id",
+        "INSERT INTO sqlx_users (first_name, last_name, email) VALUES ($1, $2, $3) RETURNING *",
         &user_request.first_name,
         &user_request.last_name,
         &user_request.email
     )
     .fetch_one(&pool)
     .await;
+    
+    info!("User created: {:?}", result);
 
     match result {
         Ok(user) => (
@@ -133,11 +142,72 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Response {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+async fn get_users(State(pool): State<PgPool>) -> Response {
+    let users = sqlx::query_as!(Users, "SELECT * FROM sqlx_users")
+        .fetch_all(&pool)
+        .await;
+
+    match users {
+        Ok(users) => (
+            StatusCode::OK,
+            Json(StoredUsers {
+                users: users.into_iter().map(|u| StoredUser::from(u)).collect(),
+            }),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(Message {
+                message: "Error".to_string(),
+                status: "Error getting users".to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct UserRequest {
     #[serde(rename = "firstName")]
     first_name: String,
     #[serde(rename = "lastName")]
     last_name: String,
     email: String,
+}
+
+#[derive(Debug, FromRow)]
+struct Users {
+    id: i64,
+    first_name: Option<String>,
+    last_name: String,
+    email: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    deleted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct StoredUser {
+    id: i64,
+    #[serde(rename = "firstName")]
+    first_name: Option<String>,
+    #[serde(rename = "lastName")]
+    last_name: String,
+    email: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct StoredUsers {
+    users: Vec<StoredUser>,
+}
+
+impl From<Users> for StoredUser {
+    fn from(user: Users) -> Self {
+        StoredUser {
+            id: user.id,
+            first_name: user.first_name,
+            last_name: user.last_name,
+            email: user.email,
+        }
+    }
 }

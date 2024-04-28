@@ -1,7 +1,7 @@
 use std::env;
 use std::net::SocketAddr;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -58,6 +58,12 @@ async fn main() {
 struct Message {
     message: String,
     status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PaginationQuery {
+    page: i64,
+    limit: i64,
 }
 
 async fn handler_json(State(pool): State<PgPool>, headers: HeaderMap) -> Response {
@@ -118,8 +124,6 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Response {
     )
     .fetch_one(&pool)
     .await;
-    
-    info!("User created: {:?}", result);
 
     match result {
         Ok(user) => (
@@ -142,16 +146,29 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Response {
     }
 }
 
-async fn get_users(State(pool): State<PgPool>) -> Response {
-    let users = sqlx::query_as!(Users, "SELECT * FROM sqlx_users")
+async fn get_users(State(pool): State<PgPool>, Query(query): Query<PaginationQuery>) -> Response {
+    let page = query.page;
+    let limit = query.limit;
+    let users = sqlx::query_as!(Users, "SELECT * FROM sqlx_users WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $1 OFFSET $2", limit, (page - 1) * limit)
         .fetch_all(&pool)
         .await;
+
+    let count = sqlx::query!("SELECT COUNT(*) FROM sqlx_users WHERE deleted_at IS NULL")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let items_in_page = users.as_ref().unwrap().len();
 
     match users {
         Ok(users) => (
             StatusCode::OK,
             Json(StoredUsers {
                 users: users.into_iter().map(|u| StoredUser::from(u)).collect(),
+                current_page: page,
+                total_items: count.count.unwrap(),
+                total_pages: (count.count.unwrap() as f64 / limit as f64).ceil() as i64,
+                items_per_page: limit,
+                items_in_page: items_in_page as i64,
             }),
         )
             .into_response(),
@@ -199,6 +216,11 @@ struct StoredUser {
 #[derive(Debug, Serialize, Deserialize)]
 struct StoredUsers {
     users: Vec<StoredUser>,
+    current_page: i64,
+    total_items: i64,
+    total_pages: i64,
+    items_per_page: i64,
+    items_in_page: i64,
 }
 
 impl From<Users> for StoredUser {

@@ -54,18 +54,7 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-#[derive(Serialize, Deserialize)]
-struct Message {
-    message: String,
-    status: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct PaginationQuery {
-    page: i64,
-    limit: i64,
-}
-
+// -- Handlers
 async fn handler_json(State(pool): State<PgPool>, headers: HeaderMap) -> Response {
     // Get custom header from Request header.
     let header_value = match headers.get("x-server-version") {
@@ -183,6 +172,7 @@ async fn get_users(State(pool): State<PgPool>, Query(query): Query<PaginationQue
     }
 }
 
+// -- Structs for request, response and entities.
 #[derive(Debug, Serialize, Deserialize)]
 struct UserRequest {
     #[serde(rename = "firstName")]
@@ -232,4 +222,16 @@ impl From<Users> for StoredUser {
             email: user.email,
         }
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct Message {
+    message: String,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PaginationQuery {
+    page: i64,
+    limit: i64,
 }

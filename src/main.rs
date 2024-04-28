@@ -6,6 +6,8 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use nid::alphabet::Base62Alphabet;
+use nid::Nanoid;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::types::chrono::{DateTime, Utc};
@@ -54,7 +56,9 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
+// -- ---------------------
 // -- Handlers
+// -- ---------------------
 async fn handler_json(State(pool): State<PgPool>, headers: HeaderMap) -> Response {
     // Get custom header from Request header.
     let header_value = match headers.get("x-server-version") {
@@ -105,8 +109,10 @@ async fn handler_create_user(
 }
 
 async fn create_user(pool: PgPool, user_request: UserRequest) -> Response {
+    let user_id: Nanoid<24, Base62Alphabet> = Nanoid::new();
     let result = sqlx::query!(
-        "INSERT INTO sqlx_users (first_name, last_name, email) VALUES ($1, $2, $3) RETURNING *",
+        "INSERT INTO sqlx_users (id, first_name, last_name, email) VALUES ($1, $2, $3, $4) RETURNING *",
+        user_id.to_string(),
         &user_request.first_name,
         &user_request.last_name,
         &user_request.email
@@ -172,7 +178,9 @@ async fn get_users(State(pool): State<PgPool>, Query(query): Query<PaginationQue
     }
 }
 
+// -- ---------------------
 // -- Structs for request, response and entities.
+// -- ---------------------
 #[derive(Debug, Serialize, Deserialize)]
 struct UserRequest {
     #[serde(rename = "firstName")]
@@ -184,7 +192,7 @@ struct UserRequest {
 
 #[derive(Debug, FromRow)]
 struct Users {
-    id: i64,
+    id: String,
     first_name: Option<String>,
     last_name: String,
     email: String,
@@ -195,7 +203,7 @@ struct Users {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct StoredUser {
-    id: i64,
+    id: String,
     #[serde(rename = "firstName")]
     first_name: Option<String>,
     #[serde(rename = "lastName")]

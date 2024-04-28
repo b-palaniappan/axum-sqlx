@@ -17,6 +17,7 @@ panic = "abort"
 # core axum library
 axum = { version = "^0" }
 dotenvy = "^0"
+nid = "3.0.0"
 
 # JSON parser
 serde = { version = "^1.0", features = ["derive"] }

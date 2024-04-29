@@ -1,17 +1,17 @@
 use std::env;
 use std::net::SocketAddr;
 
+use axum::{Json, Router};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
 use nid::alphabet::Base64UrlAlphabet;
 use nid::Nanoid;
 use serde::{Deserialize, Serialize};
+use sqlx::{Error, FromRow, PgPool};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::types::chrono::{DateTime, Utc};
-use sqlx::{Error, FromRow, PgPool};
 use tracing::{error, info, warn};
 
 #[tokio::main]
@@ -206,7 +206,11 @@ async fn get_user_by_id(State(pool): State<PgPool>, Path(id): Path<String>) -> R
 
 // PATCH update user by user id.
 // Only allowed to update first_name and last_name. Email address is not updatable.
-async fn update_user(State(pool): State<PgPool>, Path(id): Path<String>, Json(update_user_request): Json<UpdateUserRequest>) -> Response {
+async fn update_user(
+    State(pool): State<PgPool>,
+    Path(id): Path<String>,
+    Json(update_user_request): Json<UpdateUserRequest>,
+) -> Response {
     let mut query = String::from("UPDATE sqlx_users SET ");
     // let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
     let mut params = Vec::new();
@@ -223,7 +227,10 @@ async fn update_user(State(pool): State<PgPool>, Path(id): Path<String>, Json(up
     }
 
     query += &set_clauses.join(", ");
-    query += &format!(" WHERE id = ${} AND deleted_at is null RETURNING *", params.len() + 1);
+    query += &format!(
+        " WHERE id = ${} AND deleted_at is null RETURNING *",
+        params.len() + 1
+    );
     params.push(&id);
 
     info!("Patch Query: {}", query);

@@ -1,12 +1,12 @@
 use std::env;
 use std::net::SocketAddr;
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use nid::alphabet::Base62Alphabet;
+use nid::alphabet::Base64UrlAlphabet;
 use nid::Nanoid;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
@@ -47,6 +47,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(handler_json))
         .route("/users", post(handler_create_user).get(get_users))
+        .route("/users/:id", get(get_user_by_id).patch(update_user))
         .with_state(pool);
 
     // run it
@@ -59,6 +60,7 @@ async fn main() {
 // -- ---------------------
 // -- Handlers
 // -- ---------------------
+// Sample JSON handler for example.
 async fn handler_json(State(pool): State<PgPool>, headers: HeaderMap) -> Response {
     // Get custom header from Request header.
     let header_value = match headers.get("x-server-version") {
@@ -101,6 +103,7 @@ async fn handler_json(State(pool): State<PgPool>, headers: HeaderMap) -> Respons
         .into_response()
 }
 
+// POST create user handler.
 async fn handler_create_user(
     State(pool): State<PgPool>,
     Json(user_request): Json<UserRequest>,
@@ -109,7 +112,7 @@ async fn handler_create_user(
 }
 
 async fn create_user(pool: PgPool, user_request: UserRequest) -> Response {
-    let user_id: Nanoid<24, Base62Alphabet> = Nanoid::new();
+    let user_id: Nanoid<24, Base64UrlAlphabet> = Nanoid::new();
     let result = sqlx::query!(
         "INSERT INTO sqlx_users (id, first_name, last_name, email) VALUES ($1, $2, $3, $4) RETURNING *",
         user_id.to_string(),
@@ -141,6 +144,7 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Response {
     }
 }
 
+// GET all user handler with pagination.
 async fn get_users(State(pool): State<PgPool>, Query(query): Query<PaginationQuery>) -> Response {
     let page = query.page;
     let limit = query.limit;
@@ -178,6 +182,77 @@ async fn get_users(State(pool): State<PgPool>, Query(query): Query<PaginationQue
     }
 }
 
+// Get user by user id.
+async fn get_user_by_id(State(pool): State<PgPool>, Path(id): Path<String>) -> Response {
+    let user = sqlx::query_as!(Users, "SELECT * FROM sqlx_users WHERE id = $1", id)
+        .fetch_one(&pool)
+        .await;
+
+    match user {
+        Ok(user) => (StatusCode::OK, Json(StoredUser::from(user))).into_response(),
+        Err(e) => {
+            error!("Error getting user: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(Message {
+                    message: "Error".to_string(),
+                    status: "Error getting user".to_string(),
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+// PATCH update user by user id.
+// Only allowed to update first_name and last_name. Email address is not updatable.
+async fn update_user(State(pool): State<PgPool>, Path(id): Path<String>, Json(update_user_request): Json<UpdateUserRequest>) -> Response {
+    let mut query = String::from("UPDATE sqlx_users SET ");
+    // let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
+    let mut params = Vec::new();
+    let mut set_clauses = Vec::new();
+
+    if let Some(first_name) = &update_user_request.first_name {
+        set_clauses.push("first_name = $".to_owned() + &(params.len() + 1).to_string());
+        params.push(first_name);
+    }
+
+    if let Some(last_name) = &update_user_request.last_name {
+        set_clauses.push("last_name = $".to_owned() + &(params.len() + 1).to_string());
+        params.push(last_name);
+    }
+
+    query += &set_clauses.join(", ");
+    query += &format!(" WHERE id = ${} AND deleted_at is null RETURNING *", params.len() + 1);
+    params.push(&id);
+
+    info!("Patch Query: {}", query);
+    let mut query = sqlx::query_as(&query);
+    for param in &params {
+        query = query.bind(param);
+    }
+    let result: Result<Users, Error> = query.fetch_one(&pool).await;
+
+    match result {
+        Ok(user) => (
+            StatusCode::OK,
+            Json(Message {
+                message: "Success".to_string(),
+                status: format!("User updated with ID: {}", user.id),
+            }),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(Message {
+                message: "Error".to_string(),
+                status: "Error updating user".to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 // -- ---------------------
 // -- Structs for request, response and entities.
 // -- ---------------------
@@ -188,6 +263,14 @@ struct UserRequest {
     #[serde(rename = "lastName")]
     last_name: String,
     email: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct UpdateUserRequest {
+    #[serde(rename = "firstName")]
+    first_name: Option<String>,
+    #[serde(rename = "lastName")]
+    last_name: Option<String>,
 }
 
 #[derive(Debug, FromRow)]

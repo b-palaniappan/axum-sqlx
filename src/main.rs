@@ -1,17 +1,20 @@
 use std::env;
 use std::net::SocketAddr;
+use std::time::Duration;
 
-use axum::{Json, Router};
+use axum::error_handling::HandleErrorLayer;
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::{BoxError, Json, Router};
 use nid::alphabet::Base64UrlAlphabet;
 use nid::Nanoid;
 use serde::{Deserialize, Serialize};
-use sqlx::{Error, FromRow, PgPool};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::types::chrono::{DateTime, Utc};
+use sqlx::{Error, FromRow, PgPool};
+use tower::ServiceBuilder;
 use tracing::{error, info, warn};
 
 #[tokio::main]
@@ -48,13 +51,60 @@ async fn main() {
         .route("/", get(handler_json))
         .route("/users", post(handler_create_user).get(get_users))
         .route("/users/:id", get(get_user_by_id).patch(update_user))
-        .with_state(pool);
+        .with_state(pool)
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(handle_timeout_error))
+                .timeout(Duration::from_secs(5)),
+        )
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(handle_timeout_error_new))
+                .timeout(Duration::from_secs(5)),
+        );
 
     // run it
     let server_address: SocketAddr = server_addr.parse().unwrap();
     info!("Starting server at {}", server_addr);
     let listener = tokio::net::TcpListener::bind(server_address).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+// -- ---------------------
+// -- Error Handlers
+// -- ---------------------
+async fn handle_timeout_error(err: BoxError) -> impl IntoResponse {
+    let res = if err.is::<tower::timeout::error::Elapsed>() {
+        (
+            StatusCode::REQUEST_TIMEOUT,
+            "Request took too long".to_string(),
+        )
+    } else {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Unhandled internal error: {}", err),
+        )
+    };
+    (
+        res.0,
+        Json(Message {
+            message: res.1,
+            status: "Error".to_string(),
+        }),
+    )
+}
+
+async fn handle_timeout_error_new(
+    // `Method` and `Uri` are extractors so they can be used here
+    method: Method,
+    uri: Uri,
+    // the last argument must be the error itself
+    err: BoxError,
+) -> (StatusCode, String) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("`{method} {uri}` failed with {err}"),
+    )
 }
 
 // -- ---------------------
@@ -133,14 +183,7 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Response {
             }),
         )
             .into_response(),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(Message {
-                message: "Error".to_string(),
-                status: "Error creating user".to_string(),
-            }),
-        )
-            .into_response(),
+        Err(_) => AppError::InternalServerError.into_response(),
     }
 }
 
@@ -171,14 +214,7 @@ async fn get_users(State(pool): State<PgPool>, Query(query): Query<PaginationQue
             }),
         )
             .into_response(),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(Message {
-                message: "Error".to_string(),
-                status: "Error getting users".to_string(),
-            }),
-        )
-            .into_response(),
+        Err(_) => AppError::InternalServerError.into_response(),
     }
 }
 
@@ -192,14 +228,7 @@ async fn get_user_by_id(State(pool): State<PgPool>, Path(id): Path<String>) -> R
         Ok(user) => (StatusCode::OK, Json(StoredUser::from(user))).into_response(),
         Err(e) => {
             error!("Error getting user: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(Message {
-                    message: "Error".to_string(),
-                    status: "Error getting user".to_string(),
-                }),
-            )
-                .into_response()
+            AppError::InternalServerError.into_response()
         }
     }
 }
@@ -249,14 +278,7 @@ async fn update_user(
             }),
         )
             .into_response(),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(Message {
-                message: "Error".to_string(),
-                status: "Error updating user".to_string(),
-            }),
-        )
-            .into_response(),
+        Err(_) => AppError::InternalServerError.into_response(),
     }
 }
 
@@ -332,4 +354,64 @@ struct Message {
 struct PaginationQuery {
     page: i64,
     limit: i64,
+}
+
+// -- ---------------------
+// -- Global error handling.
+// -- ---------------------
+#[derive(Debug, Serialize, Deserialize)]
+struct ApiError {
+    status: u16,
+    time: String,
+    message: String,
+    debug_message: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum AppError {
+    InternalServerError,
+    FormValidationError,
+    NotFoundError,
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, api_error) = match self {
+            AppError::InternalServerError => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ApiError {
+                    status: 500,
+                    time: Utc::now().to_rfc3339(),
+                    message: "Internal Server Error".to_string(),
+                    debug_message: None,
+                },
+            ),
+            AppError::FormValidationError => (
+                StatusCode::BAD_REQUEST,
+                ApiError {
+                    status: 400,
+                    time: Utc::now().to_rfc3339(),
+                    message: "Form Validation Error".to_string(),
+                    debug_message: None,
+                },
+            ),
+            AppError::NotFoundError => (
+                StatusCode::NOT_FOUND,
+                ApiError {
+                    status: 404,
+                    time: Utc::now().to_rfc3339(),
+                    message: "Not Found".to_string(),
+                    debug_message: None,
+                },
+            ),
+        };
+
+        Response::builder()
+            .status(status)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                serde_json::to_string(&api_error).unwrap(),
+            ))
+            .unwrap()
+    }
 }

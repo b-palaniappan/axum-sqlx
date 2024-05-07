@@ -13,7 +13,7 @@ docker run --name local-postgres -e POSTGRES_PASSWORD=D0eFU4uh6sav4X64HurgN -p 5
 - [x] Get one user by user id.
 - [x] Patch partial user data by user id.
 - [ ] Soft Delete user by user id.
-- [ ] Global exception handling.
+- [x] Global exception handling.
 - [ ] gRPC in Axum framework.
 - [ ] Argon2id password hashing algorithm.
 - [ ] JWT token based authentication and authorization.

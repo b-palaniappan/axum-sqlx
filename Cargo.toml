@@ -28,6 +28,7 @@ sqlx = { version = "^0", features = ["postgres", "runtime-tokio", "chrono", "jso
 
 # Async
 tokio = { version = "^1.0", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.4.13", features = ["timeout"] }
 
 # Logging and tracing
 tracing = "^0"

@@ -2,20 +2,23 @@ use std::env;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use axum::{BoxError, Json, Router};
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{BoxError, Json, Router};
+use derive_more::{Display, Error};
 use nid::alphabet::Base64UrlAlphabet;
 use nid::Nanoid;
 use serde::{Deserialize, Serialize};
-use sqlx::postgres::PgPoolOptions;
-use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{Error, FromRow, PgPool};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::types::chrono;
+use sqlx::types::chrono::{DateTime, Utc};
 use tower::ServiceBuilder;
 use tracing::{error, info, warn};
+use validator::{Validate, ValidationErrors};
 
 #[tokio::main]
 async fn main() {
@@ -162,6 +165,15 @@ async fn handler_create_user(
 }
 
 async fn create_user(pool: PgPool, user_request: UserRequest) -> Response {
+    match user_request.validate() {
+        Ok(_) => (),
+        Err(e) => {
+            return AppError::RequestValidationError {
+                validation_error: e,
+                object: "User".to_string(),
+            }.into_response();
+        }
+    }
     let user_id: Nanoid<24, Base64UrlAlphabet> = Nanoid::new();
     let result = sqlx::query!(
         "INSERT INTO sqlx_users (id, first_name, last_name, email) VALUES ($1, $2, $3, $4) RETURNING *",
@@ -170,8 +182,8 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Response {
         &user_request.last_name,
         &user_request.email
     )
-    .fetch_one(&pool)
-    .await;
+        .fetch_one(&pool)
+        .await;
 
     match result {
         Ok(user) => (
@@ -285,12 +297,15 @@ async fn update_user(
 // -- ---------------------
 // -- Structs for request, response and entities.
 // -- ---------------------
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Validate)]
 struct UserRequest {
     #[serde(rename = "firstName")]
+    #[validate(length(min = 2, max = 50))]
     first_name: String,
     #[serde(rename = "lastName")]
+    #[validate(length(min = 2, max = 50))]
     last_name: String,
+    #[validate(email)]
     email: String,
 }
 
@@ -359,51 +374,86 @@ struct PaginationQuery {
 // -- ---------------------
 // -- Global error handling.
 // -- ---------------------
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 struct ApiError {
     status: u16,
     time: String,
     message: String,
+    #[serde(rename = "debugMessage")]
     debug_message: Option<String>,
+    #[serde(rename = "subErrors")]
+    sub_errors: Vec<ValidationError>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Display, Error)]
 pub enum AppError {
+    #[display(fmt = "Internal server error.")]
     InternalServerError,
-    FormValidationError,
+    #[display(fmt = "Bad request.")]
+    RequestValidationError {
+        validation_error: ValidationErrors,
+        object: String,
+    },
+    #[display(fmt = "User not found for the given ID")]
     NotFoundError,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ValidationError {
+    object: String,
+    field: String,
+    rejected_value: String,
+    message: String,
+    code: String,
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, api_error) = match self {
+        let (status, message, debug_message, sub_errors) = match self {
             AppError::InternalServerError => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                ApiError {
-                    status: 500,
-                    time: Utc::now().to_rfc3339(),
-                    message: "Internal Server Error".to_string(),
-                    debug_message: None,
-                },
-            ),
-            AppError::FormValidationError => (
-                StatusCode::BAD_REQUEST,
-                ApiError {
-                    status: 400,
-                    time: Utc::now().to_rfc3339(),
-                    message: "Form Validation Error".to_string(),
-                    debug_message: None,
-                },
+                self.to_string(),
+                Some("Internal server error. Please try again later.".to_string()),
+                vec![],
             ),
             AppError::NotFoundError => (
                 StatusCode::NOT_FOUND,
-                ApiError {
-                    status: 404,
-                    time: Utc::now().to_rfc3339(),
-                    message: "Not Found".to_string(),
-                    debug_message: None,
-                },
+                self.to_string(),
+                Some("User not found for given ID".to_string()),
+                vec![],
             ),
+            AppError::RequestValidationError {
+                validation_error,
+                object,
+            } => {
+                let mut validation_sub_errs = vec![];
+                for (field, field_errors) in validation_error.field_errors() {
+                    for field_error in field_errors {
+                        info!("Validation error on field: {:?}", field_error);
+                        validation_sub_errs.push(ValidationError {
+                            object: object.to_string(),
+                            field: field.to_owned(),
+                            rejected_value: field_error.params.get("value").unwrap_or(&"".into()).to_string(),
+                            message: field_error.message.as_ref().unwrap_or(&"".into()).to_string(),
+                            code: field_error.code.to_string(),
+                        })
+                    }
+                }
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "Validation error on field".to_string(),
+                    Some("Validation error".to_string()),
+                    validation_sub_errs,
+                )
+            }
+        };
+
+        let api_error = ApiError {
+            status: status.as_u16(),
+            time: Utc::now().to_rfc3339(),
+            message,
+            debug_message,
+            sub_errors,
         };
 
         Response::builder()

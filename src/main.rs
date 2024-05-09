@@ -2,20 +2,19 @@ use std::env;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use axum::{BoxError, Json, Router};
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::{BoxError, Json, Router};
 use derive_more::{Display, Error};
 use nid::alphabet::Base64UrlAlphabet;
 use nid::Nanoid;
 use serde::{Deserialize, Serialize};
-use sqlx::{Error, FromRow, PgPool};
 use sqlx::postgres::PgPoolOptions;
-use sqlx::types::chrono;
 use sqlx::types::chrono::{DateTime, Utc};
+use sqlx::{Error, FromRow, PgPool};
 use tower::ServiceBuilder;
 use tracing::{error, info, warn};
 use validator::{Validate, ValidationErrors};
@@ -171,7 +170,8 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Response {
             return AppError::RequestValidationError {
                 validation_error: e,
                 object: "User".to_string(),
-            }.into_response();
+            }
+            .into_response();
         }
     }
     let user_id: Nanoid<24, Base64UrlAlphabet> = Nanoid::new();
@@ -433,8 +433,16 @@ impl IntoResponse for AppError {
                         validation_sub_errs.push(ValidationError {
                             object: object.to_string(),
                             field: field.to_owned(),
-                            rejected_value: field_error.params.get("value").unwrap_or(&"".into()).to_string(),
-                            message: field_error.message.as_ref().unwrap_or(&"".into()).to_string(),
+                            rejected_value: field_error
+                                .params
+                                .get("value")
+                                .unwrap_or(&"".into())
+                                .to_string(),
+                            message: field_error
+                                .message
+                                .as_ref()
+                                .unwrap_or(&"".into())
+                                .to_string(),
                             code: field_error.code.to_string(),
                         })
                     }

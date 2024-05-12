@@ -254,7 +254,10 @@ async fn get_user_by_id(
         Ok(user) => Ok((StatusCode::OK, Json(StoredUser::from(user))).into_response()),
         Err(e) => {
             error!("Error getting user: {}", e);
-            Err(AppError::new(ErrorType::NotFound, "User not found"))
+            Err(AppError::new(
+                ErrorType::NotFound,
+                "User not found for ID: ".to_owned() + &id,
+            ))
         }
     }
 }
@@ -306,7 +309,7 @@ async fn update_user(
             .into_response()),
         Err(_) => Err(AppError::new(
             ErrorType::NotFound,
-            "User not found or already deleted",
+            "User not found for ID: ".to_owned() + &id,
         )),
     }
 }

@@ -26,7 +26,7 @@ sqlx = { version = "^0", features = ["postgres", "runtime-tokio", "chrono", "jso
 
 # Async
 tokio = { version = "^1.0", features = ["macros", "rt-multi-thread"] }
-tower = { version = "0.4.13", features = ["timeout"] }
+tower = { version = "^0", features = ["timeout"] }
 
 # Logging and tracing
 tracing = "^0"
@@ -34,7 +34,7 @@ tracing-subscriber = { version = "^0", features = ["env-filter"] }
 
 # Validation
 validator = { version = "^0", features = ["derive"] }
-derive_more = "0.99.17"
+derive_more = "^0"
 
 # Utils
 dotenvy = "^0"

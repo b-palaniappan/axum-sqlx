@@ -57,12 +57,7 @@ async fn main() {
         .layer(
             ServiceBuilder::new()
                 .layer(HandleErrorLayer::new(handle_timeout_error))
-                .timeout(Duration::from_secs(5)),
-        )
-        .layer(
-            ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(handle_timeout_error_new))
-                .timeout(Duration::from_secs(5)),
+                .timeout(Duration::from_secs(2)),
         );
 
     // run it
@@ -75,28 +70,7 @@ async fn main() {
 // -- ---------------------
 // -- Error Handlers
 // -- ---------------------
-async fn handle_timeout_error(err: BoxError) -> impl IntoResponse {
-    let res = if err.is::<tower::timeout::error::Elapsed>() {
-        (
-            StatusCode::REQUEST_TIMEOUT,
-            "Request took too long".to_string(),
-        )
-    } else {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Unhandled internal error: {}", err),
-        )
-    };
-    (
-        res.0,
-        Json(Message {
-            message: res.1,
-            status: "Error".to_string(),
-        }),
-    )
-}
-
-async fn handle_timeout_error_new(
+async fn handle_timeout_error(
     // `Method` and `Uri` are extractors so they can be used here
     method: Method,
     uri: Uri,
@@ -180,7 +154,7 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Result<Response
     let result = sqlx::query!(
         "INSERT INTO sqlx_users (id, first_name, last_name, email) VALUES ($1, $2, $3, $4) RETURNING *",
         user_id.to_string(),
-        &user_request.first_name,
+        user_request.first_name,
         &user_request.last_name,
         &user_request.email
     )
@@ -191,9 +165,11 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Result<Response
         Ok(user) => Ok((
             StatusCode::CREATED,
             [(header::LOCATION, format!("/users/{}", user.id))],
-            Json(Message {
-                message: "Success".to_string(),
-                status: format!("User created with ID: {}", user.id),
+            Json(StoredUser {
+                id: user.id,
+                first_name: user.first_name,
+                last_name: user.last_name,
+                email: user.email,
             }),
         )
             .into_response()),
@@ -210,7 +186,7 @@ async fn get_users(
     Query(query): Query<PaginationQuery>,
 ) -> Result<Response, AppError> {
     let page = query.page;
-    let limit = query.limit;
+    let limit = query.size;
     let users = sqlx::query_as!(Users, "SELECT * FROM sqlx_users WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $1 OFFSET $2", limit, (page - 1) * limit)
         .fetch_all(&pool)
         .await;
@@ -301,9 +277,11 @@ async fn update_user(
     match result {
         Ok(user) => Ok((
             StatusCode::OK,
-            Json(Message {
-                message: "Success".to_string(),
-                status: format!("User updated with ID: {}", user.id),
+            Json(StoredUser {
+                id: user.id,
+                first_name: user.first_name,
+                last_name: user.last_name,
+                email: user.email,
             }),
         )
             .into_response()),
@@ -325,7 +303,7 @@ struct UserRequest {
         max = 50,
         message = "First name must be between 2 and 50 characters"
     ))]
-    first_name: String,
+    first_name: Option<String>,
     #[validate(length(
         min = 2,
         max = 50,
@@ -394,7 +372,7 @@ struct Message {
 #[derive(Debug, Deserialize)]
 struct PaginationQuery {
     page: i64,
-    limit: i64,
+    size: i64,
 }
 
 // -- ---------------------

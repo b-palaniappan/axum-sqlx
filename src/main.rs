@@ -25,7 +25,7 @@ async fn main() {
     tracing_subscriber::fmt().init();
 
     dotenvy::dotenv().ok();
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let server_host = env::var("SERVER_HOST").expect("Error getting server host");
     let server_port = env::var("SERVER_PORT").expect("Error getting server port");
     let server_addr = server_host + ":" + &*server_port;
@@ -163,15 +163,17 @@ async fn handler_create_user(
     create_user(pool, user_request).await.into_response()
 }
 
-async fn create_user(pool: PgPool, user_request: UserRequest) -> Response {
+async fn create_user(pool: PgPool, user_request: UserRequest) -> Result<Response, AppError> {
     match user_request.validate() {
         Ok(_) => (),
         Err(e) => {
-            return AppError::RequestValidationError {
-                validation_error: e,
-                object: "User".to_string(),
-            }
-            .into_response();
+            return Err(AppError::new(
+                ErrorType::RequestValidationError {
+                    validation_error: e,
+                    object: "UserRequest".to_string(),
+                },
+                "Validation error. Check the request body.",
+            ));
         }
     }
     let user_id: Nanoid<24, Base64UrlAlphabet> = Nanoid::new();
@@ -186,7 +188,7 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Response {
         .await;
 
     match result {
-        Ok(user) => (
+        Ok(user) => Ok((
             StatusCode::CREATED,
             [(header::LOCATION, format!("/users/{}", user.id))],
             Json(Message {
@@ -194,13 +196,19 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Response {
                 status: format!("User created with ID: {}", user.id),
             }),
         )
-            .into_response(),
-        Err(_) => AppError::InternalServerError.into_response(),
+            .into_response()),
+        Err(_) => Err(AppError::new(
+            ErrorType::InternalServerError,
+            "Error creating user",
+        )),
     }
 }
 
 // GET all user handler with pagination.
-async fn get_users(State(pool): State<PgPool>, Query(query): Query<PaginationQuery>) -> Response {
+async fn get_users(
+    State(pool): State<PgPool>,
+    Query(query): Query<PaginationQuery>,
+) -> Result<Response, AppError> {
     let page = query.page;
     let limit = query.limit;
     let users = sqlx::query_as!(Users, "SELECT * FROM sqlx_users WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $1 OFFSET $2", limit, (page - 1) * limit)
@@ -214,7 +222,7 @@ async fn get_users(State(pool): State<PgPool>, Query(query): Query<PaginationQue
     let items_in_page = users.as_ref().unwrap().len();
 
     match users {
-        Ok(users) => (
+        Ok(users) => Ok((
             StatusCode::OK,
             Json(StoredUsers {
                 users: users.into_iter().map(|u| StoredUser::from(u)).collect(),
@@ -225,22 +233,28 @@ async fn get_users(State(pool): State<PgPool>, Query(query): Query<PaginationQue
                 items_in_page: items_in_page as i64,
             }),
         )
-            .into_response(),
-        Err(_) => AppError::InternalServerError.into_response(),
+            .into_response()),
+        Err(_) => Err(AppError::new(
+            ErrorType::InternalServerError,
+            "Error getting users",
+        )),
     }
 }
 
 // Get user by user id.
-async fn get_user_by_id(State(pool): State<PgPool>, Path(id): Path<String>) -> Response {
+async fn get_user_by_id(
+    State(pool): State<PgPool>,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
     let user = sqlx::query_as!(Users, "SELECT * FROM sqlx_users WHERE id = $1", id)
         .fetch_one(&pool)
         .await;
 
     match user {
-        Ok(user) => (StatusCode::OK, Json(StoredUser::from(user))).into_response(),
+        Ok(user) => Ok((StatusCode::OK, Json(StoredUser::from(user))).into_response()),
         Err(e) => {
             error!("Error getting user: {}", e);
-            AppError::InternalServerError.into_response()
+            Err(AppError::new(ErrorType::NotFound, "User not found"))
         }
     }
 }
@@ -251,7 +265,7 @@ async fn update_user(
     State(pool): State<PgPool>,
     Path(id): Path<String>,
     Json(update_user_request): Json<UpdateUserRequest>,
-) -> Response {
+) -> Result<Response, AppError> {
     let mut query = String::from("UPDATE sqlx_users SET ");
     // let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
     let mut params = Vec::new();
@@ -282,15 +296,18 @@ async fn update_user(
     let result: Result<Users, Error> = query.fetch_one(&pool).await;
 
     match result {
-        Ok(user) => (
+        Ok(user) => Ok((
             StatusCode::OK,
             Json(Message {
                 message: "Success".to_string(),
                 status: format!("User updated with ID: {}", user.id),
             }),
         )
-            .into_response(),
-        Err(_) => AppError::InternalServerError.into_response(),
+            .into_response()),
+        Err(_) => Err(AppError::new(
+            ErrorType::NotFound,
+            "User not found or already deleted",
+        )),
     }
 }
 
@@ -298,22 +315,28 @@ async fn update_user(
 // -- Structs for request, response and entities.
 // -- ---------------------
 #[derive(Debug, Serialize, Deserialize, Validate)]
+#[serde(rename_all = "camelCase")]
 struct UserRequest {
-    #[serde(rename = "firstName")]
-    #[validate(length(min = 2, max = 50))]
+    #[validate(length(
+        min = 2,
+        max = 50,
+        message = "First name must be between 2 and 50 characters"
+    ))]
     first_name: String,
-    #[serde(rename = "lastName")]
-    #[validate(length(min = 2, max = 50))]
+    #[validate(length(
+        min = 2,
+        max = 50,
+        message = "Last name must be between 2 and 50 characters"
+    ))]
     last_name: String,
-    #[validate(email)]
+    #[validate(email(message = "Invalid email address"))]
     email: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct UpdateUserRequest {
-    #[serde(rename = "firstName")]
     first_name: Option<String>,
-    #[serde(rename = "lastName")]
     last_name: Option<String>,
 }
 
@@ -328,17 +351,17 @@ struct Users {
     deleted_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct StoredUser {
     id: String,
-    #[serde(rename = "firstName")]
     first_name: Option<String>,
-    #[serde(rename = "lastName")]
     last_name: String,
     email: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct StoredUsers {
     users: Vec<StoredUser>,
     current_page: i64,
@@ -374,6 +397,38 @@ struct PaginationQuery {
 // -- ---------------------
 // -- Global error handling.
 // -- ---------------------
+
+// New error data type.
+pub struct AppError {
+    error_type: ErrorType,
+    error_message: String,
+}
+
+#[derive(Debug, Display, Error, Clone)]
+pub enum ErrorType {
+    #[display(fmt = "Not found")]
+    NotFound,
+    #[display(fmt = "Bad request")]
+    BadRequest,
+    #[display(fmt = "Internal server error")]
+    InternalServerError,
+    #[display(fmt = "Request validation error")]
+    RequestValidationError {
+        validation_error: ValidationErrors,
+        object: String,
+    },
+}
+
+impl AppError {
+    // constructor.
+    pub fn new(error_type: ErrorType, message: impl Into<String>) -> Self {
+        Self {
+            error_type,
+            error_message: message.into(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct ApiError {
     status: u16,
@@ -385,19 +440,6 @@ struct ApiError {
     sub_errors: Vec<ValidationError>,
 }
 
-#[derive(Debug, Display, Error)]
-pub enum AppError {
-    #[display(fmt = "Internal server error.")]
-    InternalServerError,
-    #[display(fmt = "Bad request.")]
-    RequestValidationError {
-        validation_error: ValidationErrors,
-        object: String,
-    },
-    #[display(fmt = "User not found for the given ID")]
-    NotFoundError,
-}
-
 #[derive(Debug, Serialize)]
 pub struct ValidationError {
     object: String,
@@ -407,26 +449,34 @@ pub struct ValidationError {
     code: String,
 }
 
+// New type of error handling.
 impl IntoResponse for AppError {
+    // implementation for the trait.
     fn into_response(self) -> Response {
-        let (status, message, debug_message, sub_errors) = match self {
-            AppError::InternalServerError => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                self.to_string(),
-                Some("Internal server error. Please try again later.".to_string()),
-                vec![],
-            ),
-            AppError::NotFoundError => (
+        let (status, message, debug_message, sub_errors) = match self.error_type.clone() {
+            ErrorType::NotFound => (
                 StatusCode::NOT_FOUND,
-                self.to_string(),
-                Some("User not found for given ID".to_string()),
+                self.error_type.to_string(),
+                Some(self.error_message),
                 vec![],
             ),
-            AppError::RequestValidationError {
+            ErrorType::BadRequest => (
+                StatusCode::BAD_REQUEST,
+                self.error_type.to_string(),
+                Some(self.error_message),
+                vec![],
+            ),
+            ErrorType::InternalServerError => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                self.error_type.to_string(),
+                Some(self.error_message),
+                vec![],
+            ),
+            ErrorType::RequestValidationError {
                 validation_error,
                 object,
             } => {
-                let mut validation_sub_errs = vec![];
+                let mut validation_sub_errs = Vec::new();
                 for (field, field_errors) in validation_error.field_errors() {
                     for field_error in field_errors {
                         info!("Validation error on field: {:?}", field_error);
@@ -449,15 +499,14 @@ impl IntoResponse for AppError {
                 }
                 (
                     StatusCode::UNPROCESSABLE_ENTITY,
-                    "Validation error on field".to_string(),
-                    Some("Validation error".to_string()),
+                    self.error_type.to_string(),
+                    Some(self.error_message),
                     validation_sub_errs,
                 )
             }
         };
-
         let api_error = ApiError {
-            status: status.as_u16(),
+            status: status.into(),
             time: Utc::now().to_rfc3339(),
             message,
             debug_message,
@@ -468,8 +517,8 @@ impl IntoResponse for AppError {
             .status(status)
             .header(header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(
-                serde_json::to_string(&api_error).unwrap(),
+                serde_json::to_string(&api_error).unwrap_or("".to_string()),
             ))
-            .unwrap()
+            .unwrap_or(Response::new(axum::body::Body::empty()))
     }
 }

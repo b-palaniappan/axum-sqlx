@@ -21,8 +21,11 @@ axum = { version = "^0" }
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = "^1.0"
 
-# SQL with MySQL.
+# SQL with PostgreSQL.
 sqlx = { version = "^0", features = ["postgres", "runtime-tokio", "chrono", "json"] }
+
+# Security
+argon2 = "0.5.3"
 
 # Async
 tokio = { version = "^1.0", features = ["macros", "rt-multi-thread"] }

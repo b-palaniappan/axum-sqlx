@@ -1,3 +1,6 @@
+use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::SaltString;
+use argon2::{Algorithm, Argon2, Params, PasswordHasher};
 use std::env;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -57,7 +60,7 @@ async fn main() {
         .layer(
             ServiceBuilder::new()
                 .layer(HandleErrorLayer::new(handle_timeout_error))
-                .timeout(Duration::from_secs(2)),
+                .timeout(Duration::from_secs(5)),
         );
 
     // run it
@@ -151,12 +154,27 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Result<Response
         }
     }
     let user_id: Nanoid<24, Base64UrlAlphabet> = Nanoid::new();
+    
+    // Hash password using Argon2.
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let password_hash = argon2
+        .hash_password_customized(
+            user_request.password.as_bytes(),
+            Some(Algorithm::Argon2id.ident()),
+            Some(19),
+            Params::new(65536, 4, 5, Some(64)).unwrap(),
+            &salt,
+        )
+        .unwrap();
+
     let result = sqlx::query!(
-        "INSERT INTO sqlx_users (id, first_name, last_name, email) VALUES ($1, $2, $3, $4) RETURNING *",
+        "INSERT INTO sqlx_users (id, first_name, last_name, email, password_hash) VALUES ($1, $2, $3, $4, $5) RETURNING *",
         user_id.to_string(),
         user_request.first_name,
         &user_request.last_name,
-        &user_request.email
+        &user_request.email,
+        password_hash.to_string()
     )
         .fetch_one(&pool)
         .await;
@@ -310,6 +328,12 @@ struct UserRequest {
         message = "Last name must be between 2 and 50 characters"
     ))]
     last_name: String,
+    #[validate(length(
+        min = 12,
+        max = 255,
+        message = "Password must be between 12 and 255 characters"
+    ))]
+    password: String,
     #[validate(email(message = "Invalid email address"))]
     email: String,
 }
@@ -327,6 +351,7 @@ struct Users {
     first_name: Option<String>,
     last_name: String,
     email: String,
+    password_hash: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     deleted_at: Option<DateTime<Utc>>,

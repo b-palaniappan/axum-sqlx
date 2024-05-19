@@ -5,12 +5,11 @@ use std::env;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use axum::error_handling::HandleErrorLayer;
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
+use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{BoxError, Json, Router};
+use axum::{Json, Router};
 use derive_more::{Display, Error};
 use nid::alphabet::Base64UrlAlphabet;
 use nid::Nanoid;
@@ -18,7 +17,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{Error, FromRow, PgPool};
-use tower::ServiceBuilder;
+use tower_http::compression::CompressionLayer;
+use tower_http::cors::{Any, CorsLayer};
+use tower_http::timeout::TimeoutLayer;
 use tracing::{error, info, warn};
 use validator::{Validate, ValidationErrors};
 
@@ -51,17 +52,28 @@ async fn main() {
         .await
         .expect("Failed to migrate database");
 
+    let cors = CorsLayer::new()
+        // allow `GET`, `POST` and `PATCH` when accessing the resource
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE, Method::OPTIONS])
+        // allow requests from any origin
+        .allow_origin(Any);
+
     // build our application with a route
     let app = Router::new()
         .route("/", get(handler_json))
         .route("/users", post(handler_create_user).get(get_users))
         .route("/users/:id", get(get_user_by_id).patch(update_user))
+        .fallback(page_not_found)
         .with_state(pool)
         .layer(
-            ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(handle_timeout_error))
-                .timeout(Duration::from_secs(5)),
-        );
+            CompressionLayer::new()
+                .br(true)
+                .deflate(true)
+                .gzip(true)
+                .zstd(true),
+        )
+        .layer(TimeoutLayer::new(Duration::from_secs(5)))
+        .layer(cors);
 
     // run it
     let server_address: SocketAddr = server_addr.parse().unwrap();
@@ -73,17 +85,18 @@ async fn main() {
 // -- ---------------------
 // -- Error Handlers
 // -- ---------------------
-async fn handle_timeout_error(
-    // `Method` and `Uri` are extractors so they can be used here
-    method: Method,
-    uri: Uri,
-    // the last argument must be the error itself
-    err: BoxError,
-) -> (StatusCode, String) {
+async fn page_not_found() -> Response {
     (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        format!("`{method} {uri}` failed with {err}"),
+        StatusCode::NOT_FOUND,
+        Json(ApiError {
+            status: 404,
+            time: Utc::now().to_rfc3339(),
+            message: "Resource not found".to_string(),
+            debug_message: None,
+            sub_errors: vec![],
+        }),
     )
+        .into_response()
 }
 
 // -- ---------------------
@@ -154,7 +167,7 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Result<Response
         }
     }
     let user_id: Nanoid<24, Base64UrlAlphabet> = Nanoid::new();
-    
+
     // Hash password using Argon2.
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();

@@ -1,12 +1,12 @@
-use argon2::password_hash::rand_core::OsRng;
-use argon2::password_hash::SaltString;
-use argon2::{Algorithm, Argon2, Params, PasswordHasher};
 use std::env;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::SaltString;
+use argon2::{Algorithm, Argon2, Params, PasswordHasher};
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, Method, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -18,7 +18,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{Error, FromRow, PgPool};
 use tower_http::compression::CompressionLayer;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
 use tracing::{error, info, warn};
 use validator::{Validate, ValidationErrors};
@@ -54,9 +54,17 @@ async fn main() {
 
     let cors = CorsLayer::new()
         // allow `GET`, `POST` and `PATCH` when accessing the resource
-        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        // Allow only `Content-Type` header.
+        .allow_headers(vec![header::CONTENT_TYPE])
         // allow requests from any origin
-        .allow_origin(Any);
+        .allow_origin("http://localhost:3000".parse::<HeaderValue>().unwrap());
 
     // build our application with a route
     let app = Router::new()
@@ -65,13 +73,7 @@ async fn main() {
         .route("/users/:id", get(get_user_by_id).patch(update_user))
         .fallback(page_not_found)
         .with_state(pool)
-        .layer(
-            CompressionLayer::new()
-                .br(true)
-                .deflate(true)
-                .gzip(true)
-                .zstd(true),
-        )
+        .layer(CompressionLayer::new())
         .layer(TimeoutLayer::new(Duration::from_secs(5)))
         .layer(cors);
 

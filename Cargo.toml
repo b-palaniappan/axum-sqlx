@@ -16,6 +16,7 @@ panic = "abort"
 [dependencies]
 # core axum library
 axum = { version = "^0" }
+axum-extra = "^0"
 
 # Tower dependencies
 tower-http = { version = "0.5.2", features = ["cors", "compression-full", "timeout"] }

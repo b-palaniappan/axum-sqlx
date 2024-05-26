@@ -28,6 +28,11 @@ use utoipa::{IntoParams, Modify, OpenApi, ToSchema};
 use utoipa_scalar::{Scalar, Servable};
 use validator::{Validate, ValidationErrors};
 
+const JWT_TOKEN_SECRET: &str = "VFGiWL9ua5979rNE7GPWTXDBb5qLkCSHJqd7_S0rhh";
+const JWT_TOKEN_EXPIRY: u64 = 86400;
+const JWT_TOKEN_ISSUER: &str = "http://localhost:3000";
+const DUMMY_HASHED_PASSWORD: &str = "$argon2id$v=19$m=65536,t=4,p=5$UNsE4Dxg3nVM4JeInGjJxw$b6uObfrK8qbCJMQr9VVDuDizRhxCZl4zXwZWbhERMaGjPvcBsHZmcbAwXsUPqtekDwkf4u3qiVKG/maAR+7BdA";
+
 #[tokio::main]
 async fn main() {
     // Logging handler using tracing.
@@ -65,7 +70,7 @@ async fn main() {
         tags(
             (name = "Users", description = "User management API")
         ),
-        paths(handler_create_user, get_users, get_user_by_id, update_user, handler_json, authenticate_user),
+        paths(handler_create_user, get_users, get_user_by_id, update_user, handler_json, authenticate_user, delete_user),
         components(schemas(UserRequest, UpdateUserRequest, StoredUser, StoredUsers, Message, AppError, ApiError, ValidationError, UserAuthRequest, UserAuthResponse)),
     )]
     struct ApiDoc;
@@ -100,7 +105,10 @@ async fn main() {
     let app = Router::new()
         .route("/", get(handler_json))
         .route("/users", post(handler_create_user).get(get_users))
-        .route("/users/:id", get(get_user_by_id).patch(update_user))
+        .route(
+            "/users/:id",
+            get(get_user_by_id).patch(update_user).delete(delete_user),
+        )
         .route("/auth", post(authenticate_user))
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .fallback(page_not_found)
@@ -249,16 +257,16 @@ async fn authenticate_user(
                 let jti: Nanoid<32, Base64UrlAlphabet> = Nanoid::new();
                 let user_claim = Claims {
                     sub: user.id,
-                    iss: "http://localhost:3000".to_string(),
+                    iss: JWT_TOKEN_ISSUER.to_string(),
                     jti: jti.to_string(),
                     iat: now.timestamp(),
                     nbf: now.timestamp(),
-                    exp: now.add(Duration::from_secs(86400)).timestamp(),
+                    exp: now.add(Duration::from_secs(JWT_TOKEN_EXPIRY)).timestamp(),
                 };
                 let token = encode(
                     &Header::default(),
                     &user_claim,
-                    &EncodingKey::from_secret("VFGiWL9ua5979rNE7GPWTXDBb5qLkCSHJqd7_S0rhh".as_ref()),
+                    &EncodingKey::from_secret(JWT_TOKEN_SECRET.as_ref()),
                 )
                 .unwrap();
                 // Generate JWT token and return.
@@ -275,7 +283,7 @@ async fn authenticate_user(
             // User not found.
             // Still trigger a dummy check to avoid returning immediately.
             // Which can be used by hacker to figure out user id is not valid.
-            let password_hash = PasswordHash::new("$argon2id$v=19$m=65536,t=4,p=5$UNsE4Dxg3nVM4JeInGjJxw$b6uObfrK8qbCJMQr9VVDuDizRhxCZl4zXwZWbhERMaGjPvcBsHZmcbAwXsUPqtekDwkf4u3qiVKG/maAR+7BdA").unwrap();
+            let password_hash = PasswordHash::new(DUMMY_HASHED_PASSWORD).unwrap();
             let _ = argon2.verify_password("dummy".as_bytes(), &password_hash);
             Err(AppError::new(
                 ErrorType::UnauthorizedError,
@@ -525,6 +533,41 @@ async fn update_user(
     }
 }
 
+// Delete user by user id.
+/// Delete user by ID
+///
+/// Delete user by unique id. Soft delete user by setting deleted_at timestamp.
+#[utoipa::path(
+    delete,
+    path = "/users/{id}",
+    tag = "Users",
+    params(
+        ("id" = String, Path, description = "Unique user id")
+    ),
+    responses(
+        (status = 200, description = "User created successfully", body = StoredUser),
+        (status = 404, description = "User not found for the ID", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    )
+)]
+async fn delete_user(
+    State(pool): State<PgPool>,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    let result = sqlx::query_as!(
+        Users,
+        "UPDATE sqlx_users SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL",
+        id
+    )
+    .fetch_one(&pool)
+    .await;
+
+    match result {
+        Ok(_) => Ok((StatusCode::NO_CONTENT,).into_response()),
+        Err(_) => Ok((StatusCode::NO_CONTENT,).into_response()),
+    }
+}
+
 // -- ---------------------
 // -- Structs for request, response and entities.
 // -- ---------------------
@@ -666,8 +709,11 @@ struct Users {
     last_name: String,
     email: String,
     password_hash: String,
+    #[allow(dead_code)]
     created_at: DateTime<Utc>,
+    #[allow(dead_code)]
     updated_at: DateTime<Utc>,
+    #[allow(dead_code)]
     deleted_at: Option<DateTime<Utc>>,
 }
 

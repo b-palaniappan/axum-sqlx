@@ -21,8 +21,9 @@ use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
 use tracing::{error, info, warn};
-use utoipa::{OpenApi, ToSchema};
-use utoipa_swagger_ui::SwaggerUi;
+use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
+use utoipa::{IntoParams, Modify, OpenApi, ToSchema};
+use utoipa_scalar::{Scalar, Servable};
 use validator::{Validate, ValidationErrors};
 
 #[tokio::main]
@@ -54,6 +55,31 @@ async fn main() {
         .await
         .expect("Failed to migrate database");
 
+    // OpenAPI documentation.
+    #[derive(OpenApi)]
+    #[openapi(
+        info(title = "Users Api", contact(name = "Bala", email = "bala@c12.io"), license(name = "MIT", url = "https://opensource.org/licenses/MIT")),
+        modifiers(&SecurityAddon),
+        tags(
+            (name = "Users", description = "User management API")
+        ),
+        paths(handler_create_user, get_users, get_user_by_id, update_user, handler_json),
+        components(schemas(UserRequest, UpdateUserRequest, StoredUser, StoredUsers, Message, AppError, ApiError))
+    )]
+    struct ApiDoc;
+    struct SecurityAddon;
+
+    impl Modify for SecurityAddon {
+        fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+            if let Some(components) = openapi.components.as_mut() {
+                components.add_security_scheme(
+                    "api_key",
+                    SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::new("todo_apikey"))),
+                )
+            }
+        }
+    }
+
     let cors = CorsLayer::new()
         // allow `GET`, `POST` and `PATCH` when accessing the resource
         .allow_methods([
@@ -73,7 +99,7 @@ async fn main() {
         .route("/", get(handler_json))
         .route("/users", post(handler_create_user).get(get_users))
         .route("/users/:id", get(get_user_by_id).patch(update_user))
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .fallback(page_not_found)
         .with_state(pool)
         .layer(CompressionLayer::new())
@@ -85,22 +111,6 @@ async fn main() {
     info!("Starting server at {}", server_addr);
     let listener = tokio::net::TcpListener::bind(server_address).await.unwrap();
     axum::serve(listener, app).await.unwrap();
-}
-
-#[derive(OpenApi)]
-#[openapi(paths(openapi))]
-struct ApiDoc;
-
-// Return JSON version of an OpenAPI schema
-#[utoipa::path(
-    get,
-    path = "/api-docs/openapi.json",
-    responses(
-        (status = 200, description = "JSON file", body = ())
-    )
-)]
-async fn openapi() -> Json<utoipa::openapi::OpenApi> {
-    Json(ApiDoc::openapi())
 }
 
 // -- ---------------------
@@ -124,6 +134,20 @@ async fn page_not_found() -> Response {
 // -- Handlers
 // -- ---------------------
 // Sample JSON handler for example.
+/// Get sample JSON response
+///
+/// Get a sample JSON response with custom header.
+#[utoipa::path(
+    get,
+    path = "/",
+    tag = "JSON",
+    params(
+        ("x-server-version" = String, Header, description = "Server version", example = "v0.1.0")
+    ),
+    responses(
+        (status = 200, description = "User created successfully", body = Message),
+    )
+)]
 async fn handler_json(State(pool): State<PgPool>, headers: HeaderMap) -> Response {
     // Get custom header from Request header.
     let header_value = match headers.get("x-server-version") {
@@ -167,6 +191,20 @@ async fn handler_json(State(pool): State<PgPool>, headers: HeaderMap) -> Respons
 }
 
 // POST create user handler.
+/// Create user
+///
+/// Create a new user with name, email, and password.
+#[utoipa::path(
+    post,
+    path = "/users",
+    request_body = UserRequest,
+    tag = "Users",
+    responses(
+        (status = 201, description = "User created successfully", body = StoredUser),
+        (status = 400, description = "Unprocessable request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    )
+)]
 async fn handler_create_user(
     State(pool): State<PgPool>,
     Json(user_request): Json<UserRequest>,
@@ -233,6 +271,21 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Result<Response
 }
 
 // GET all user handler with pagination.
+/// Get list of users
+///
+/// Get a list of users with pagination.
+#[utoipa::path(
+    get,
+    path = "/users",
+    tag = "Users",
+    params(
+        PaginationQuery
+    ),
+    responses(
+        (status = 200, description = "User created successfully", body = StoredUsers),
+        (status = 500, description = "Internal server error", body = ApiError),
+    )
+)]
 async fn get_users(
     State(pool): State<PgPool>,
     Query(query): Query<PaginationQuery>,
@@ -270,6 +323,22 @@ async fn get_users(
 }
 
 // Get user by user id.
+/// Get a user by ID
+///
+/// Get a user by unique id.
+#[utoipa::path(
+    get,
+    path = "/users/{id}",
+    tag = "Users",
+    params(
+        ("id" = String, Path, description = "Unique user id")
+    ),
+    responses(
+        (status = 200, description = "User created successfully", body = StoredUser),
+        (status = 404, description = "User not found for the ID", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    )
+)]
 async fn get_user_by_id(
     State(pool): State<PgPool>,
     Path(id): Path<String>,
@@ -292,6 +361,23 @@ async fn get_user_by_id(
 
 // PATCH update user by user id.
 // Only allowed to update first_name and last_name. Email address is not updatable.
+/// Update user by ID
+///
+/// Update user by unique id. Only allowed to update first name and last name.
+#[utoipa::path(
+    patch,
+    path = "/users/{id}",
+    request_body = UpdateUserRequest,
+    tag = "Users",
+    params(
+        ("id" = String, Path, description = "Unique user id")
+    ),
+    responses(
+        (status = 200, description = "User created successfully", body = StoredUser),
+        (status = 404, description = "User not found for the ID", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    )
+)]
 async fn update_user(
     State(pool): State<PgPool>,
     Path(id): Path<String>,
@@ -355,27 +441,33 @@ struct UserRequest {
         max = 50,
         message = "First name must be between 2 and 50 characters"
     ))]
+    #[schema(example = "John")]
     first_name: Option<String>,
     #[validate(length(
         min = 2,
         max = 50,
         message = "Last name must be between 2 and 50 characters"
     ))]
+    #[schema(example = "Doe")]
     last_name: String,
     #[validate(length(
         min = 12,
         max = 255,
         message = "Password must be between 12 and 255 characters"
     ))]
+    #[schema(example = "SecretPassword123!")]
     password: String,
     #[validate(email(message = "Invalid email address"))]
+    #[schema(example = "me@example.com")]
     email: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct UpdateUserRequest {
+    #[schema(example = "John")]
     first_name: Option<String>,
+    #[schema(example = "Doe")]
     last_name: Option<String>,
 }
 
@@ -394,9 +486,13 @@ struct Users {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct StoredUser {
+    #[schema(example = "kfERHUaNceaE9i9FrbnNH")]
     id: String,
+    #[schema(example = "John")]
     first_name: Option<String>,
+    #[schema(example = "Doe")]
     last_name: String,
+    #[schema(example = "me@example.com")]
     email: String,
 }
 
@@ -424,11 +520,13 @@ impl From<Users> for StoredUser {
 
 #[derive(Serialize, Deserialize, ToSchema)]
 struct Message {
+    #[schema(example = "Hello")]
     message: String,
+    #[schema(example = "Success")]
     status: String,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, IntoParams)]
 struct PaginationQuery {
     page: i64,
     size: i64,
@@ -439,6 +537,7 @@ struct PaginationQuery {
 // -- ---------------------
 
 // New error data type.
+#[derive(ToSchema)]
 pub struct AppError {
     error_type: ErrorType,
     error_message: String,
@@ -471,10 +570,14 @@ impl AppError {
 
 #[derive(Debug, Serialize, ToSchema)]
 struct ApiError {
+    #[schema(example = "500")]
     status: u16,
+    #[schema(example = "2024-01-01T12:00:00.000Z")]
     time: String,
+    #[schema(example = "Internal server error")]
     message: String,
     #[serde(rename = "debugMessage")]
+    #[schema(example = "Internal server error. Try after some time")]
     debug_message: Option<String>,
     #[serde(rename = "subErrors")]
     sub_errors: Vec<ValidationError>,

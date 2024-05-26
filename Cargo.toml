@@ -45,7 +45,7 @@ derive_more = "^0"
 
 # OpenAPI / Swagger UI.
 utoipa = { version = "^4", features = ["axum_extras", "chrono"] }
-utoipa-swagger-ui = { version = "^7", features = ["axum"] }
+utoipa-scalar = { version = "^0", features = ["axum"] }
 
 # Utils
 dotenvy = "^0"

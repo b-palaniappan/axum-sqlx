@@ -1,5 +1,6 @@
 use std::env;
 use std::net::SocketAddr;
+use std::ops::Add;
 use std::time::Duration;
 
 use argon2::password_hash::rand_core::OsRng;
@@ -11,6 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use derive_more::{Display, Error};
+use jsonwebtoken::{encode, EncodingKey, Header};
 use nid::alphabet::Base64UrlAlphabet;
 use nid::Nanoid;
 use serde::{Deserialize, Serialize};
@@ -243,14 +245,24 @@ async fn authenticate_user(
                 .verify_password(user_auth_request.password.as_bytes(), &password_hash)
                 .is_ok()
             {
-                // Generate JWT token and return.
-                Ok((
-                    StatusCode::OK,
-                    Json(UserAuthResponse {
-                        token: "dummy.token.here".to_string(),
-                    }),
+                let now = Utc::now();
+                let jti: Nanoid<32, Base64UrlAlphabet> = Nanoid::new();
+                let user_claim = Claims {
+                    sub: user.id,
+                    iss: "http://localhost:3000".to_string(),
+                    jti: jti.to_string(),
+                    iat: now.timestamp(),
+                    nbf: now.timestamp(),
+                    exp: now.add(Duration::from_secs(86400)).timestamp(),
+                };
+                let token = encode(
+                    &Header::default(),
+                    &user_claim,
+                    &EncodingKey::from_secret("VFGiWL9ua5979rNE7GPWTXDBb5qLkCSHJqd7_S0rhh".as_ref()),
                 )
-                    .into_response())
+                .unwrap();
+                // Generate JWT token and return.
+                Ok((StatusCode::OK, Json(UserAuthResponse { token })).into_response())
             } else {
                 // Invalid credentials.
                 Err(AppError::new(
@@ -632,6 +644,16 @@ struct PaginationQuery {
     /// number of items per page
     #[param(default = 20, example = 20, required)]
     size: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    sub: String,
+    iss: String,
+    jti: String,
+    iat: i64,
+    nbf: i64,
+    exp: i64,
 }
 
 // -- ---------------------

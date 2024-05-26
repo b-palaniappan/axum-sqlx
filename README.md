@@ -22,6 +22,7 @@ docker run --name local-postgres -e POSTGRES_PASSWORD=D0eFU4uh6sav4X64HurgN -p 5
 - [x] Argon2id password hashing algorithm.
 - [x] Add openapi / Swagger UI documentation.
 - [ ] JWT token based authentication and authorization.
+- [ ] Add secret manager to store secrets.
 - [ ] Rest api client using reqwest. 
 - [ ] Unit and Integration testing.
 - [ ] Dockerize the application.

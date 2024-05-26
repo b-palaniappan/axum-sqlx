@@ -1,6 +1,6 @@
 [package]
 name = "axum-sqlx"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -29,11 +29,11 @@ serde_json = "^1.0"
 sqlx = { version = "^0", features = ["postgres", "runtime-tokio", "chrono", "json"] }
 
 # Security
-argon2 = "0.5.3"
+argon2 = "^0"
+jsonwebtoken = "^9"
 
 # Async
 tokio = { version = "^1.0", features = ["macros", "rt-multi-thread"] }
-
 
 # Logging and tracing
 tracing = "^0"
@@ -43,6 +43,10 @@ tracing-subscriber = { version = "^0", features = ["env-filter"] }
 validator = { version = "^0", features = ["derive"] }
 derive_more = "^0"
 
+# OpenAPI / Swagger UI.
+utoipa = { version = "^4", features = ["axum_extras", "chrono"] }
+utoipa-swagger-ui = { version = "^7", features = ["axum"] }
+
 # Utils
 dotenvy = "^0"
-nid = "3.0.0"
+nid = "^3"

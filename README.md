@@ -6,6 +6,7 @@
 docker run --name local-postgres -e POSTGRES_PASSWORD=D0eFU4uh6sav4X64HurgN -p 5432:5432 -d postgres:alpine
 ```
 - User ID and Password: `postgres` and `D0eFU4uh6sav4X64HurgN`
+- Run migration using: `sqlx migrate run` to create table in PostgreSQL.
 
 ## Features
 - [x] Create new user
@@ -15,5 +16,10 @@ docker run --name local-postgres -e POSTGRES_PASSWORD=D0eFU4uh6sav4X64HurgN -p 5
 - [ ] Soft Delete user by user id.
 - [x] Global exception handling.
 - [ ] gRPC in Axum framework.
-- [ ] Argon2id password hashing algorithm.
+- [x] Argon2id password hashing algorithm.
+- [ ] Add openapi / Swagger UI documentation.
 - [ ] JWT token based authentication and authorization.
+- [ ] Rest api client using reqwest. 
+- [ ] Unit and Integration testing.
+- [ ] Dockerize the application.
+- [ ] CI/CD pipeline using GitHub Actions.

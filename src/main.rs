@@ -21,6 +21,8 @@ use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
 use tracing::{error, info, warn};
+use utoipa::{OpenApi, ToSchema};
+use utoipa_swagger_ui::SwaggerUi;
 use validator::{Validate, ValidationErrors};
 
 #[tokio::main]
@@ -71,6 +73,7 @@ async fn main() {
         .route("/", get(handler_json))
         .route("/users", post(handler_create_user).get(get_users))
         .route("/users/:id", get(get_user_by_id).patch(update_user))
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .fallback(page_not_found)
         .with_state(pool)
         .layer(CompressionLayer::new())
@@ -82,6 +85,22 @@ async fn main() {
     info!("Starting server at {}", server_addr);
     let listener = tokio::net::TcpListener::bind(server_address).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+#[derive(OpenApi)]
+#[openapi(paths(openapi))]
+struct ApiDoc;
+
+// Return JSON version of an OpenAPI schema
+#[utoipa::path(
+    get,
+    path = "/api-docs/openapi.json",
+    responses(
+        (status = 200, description = "JSON file", body = ())
+    )
+)]
+async fn openapi() -> Json<utoipa::openapi::OpenApi> {
+    Json(ApiDoc::openapi())
 }
 
 // -- ---------------------
@@ -328,7 +347,7 @@ async fn update_user(
 // -- ---------------------
 // -- Structs for request, response and entities.
 // -- ---------------------
-#[derive(Debug, Serialize, Deserialize, Validate)]
+#[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct UserRequest {
     #[validate(length(
@@ -353,7 +372,7 @@ struct UserRequest {
     email: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct UpdateUserRequest {
     first_name: Option<String>,
@@ -372,7 +391,7 @@ struct Users {
     deleted_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct StoredUser {
     id: String,
@@ -381,7 +400,7 @@ struct StoredUser {
     email: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct StoredUsers {
     users: Vec<StoredUser>,
@@ -403,13 +422,13 @@ impl From<Users> for StoredUser {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 struct Message {
     message: String,
     status: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 struct PaginationQuery {
     page: i64,
     size: i64,
@@ -425,7 +444,7 @@ pub struct AppError {
     error_message: String,
 }
 
-#[derive(Debug, Display, Error, Clone)]
+#[derive(Debug, Display, Error, Clone, ToSchema)]
 pub enum ErrorType {
     #[display(fmt = "Not found")]
     NotFound,
@@ -450,7 +469,7 @@ impl AppError {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct ApiError {
     status: u16,
     time: String,
@@ -461,7 +480,7 @@ struct ApiError {
     sub_errors: Vec<ValidationError>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ValidationError {
     object: String,
     field: String,

@@ -521,14 +521,20 @@ impl From<Users> for StoredUser {
 #[derive(Serialize, Deserialize, ToSchema)]
 struct Message {
     #[schema(example = "Hello")]
+    /// Message to display
     message: String,
     #[schema(example = "Success")]
+    /// Status of the message
     status: String,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
 struct PaginationQuery {
+    /// current page of the pagination
+    #[param(default = 1, example = 1)]
     page: i64,
+    /// number of items per page
+    #[param(default = 20, example = 20, required)]
     size: i64,
 }
 

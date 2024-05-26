@@ -8,6 +8,9 @@ docker run --name local-postgres -e POSTGRES_PASSWORD=D0eFU4uh6sav4X64HurgN -p 5
 - User ID and Password: `postgres` and `D0eFU4uh6sav4X64HurgN`
 - Run migration using: `sqlx migrate run` to create table in PostgreSQL.
 
+## OpenAPI documentation
+- Access OpenAPI docs using `/scalar` endpoint.
+
 ## Features
 - [x] Create new user
 - [x] Get all users with pagination logic.

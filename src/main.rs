@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
-use argon2::{Algorithm, Argon2, Params, PasswordHasher};
+use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -63,8 +63,8 @@ async fn main() {
         tags(
             (name = "Users", description = "User management API")
         ),
-        paths(handler_create_user, get_users, get_user_by_id, update_user, handler_json),
-        components(schemas(UserRequest, UpdateUserRequest, StoredUser, StoredUsers, Message, AppError, ApiError))
+        paths(handler_create_user, get_users, get_user_by_id, update_user, handler_json, authenticate_user),
+        components(schemas(UserRequest, UpdateUserRequest, StoredUser, StoredUsers, Message, AppError, ApiError, ValidationError, UserAuthRequest, UserAuthResponse)),
     )]
     struct ApiDoc;
     struct SecurityAddon;
@@ -99,6 +99,7 @@ async fn main() {
         .route("/", get(handler_json))
         .route("/users", post(handler_create_user).get(get_users))
         .route("/users/:id", get(get_user_by_id).patch(update_user))
+        .route("/auth", post(authenticate_user))
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .fallback(page_not_found)
         .with_state(pool)
@@ -139,13 +140,15 @@ async fn page_not_found() -> Response {
 /// Get a sample JSON response with custom header.
 #[utoipa::path(
     get,
-    path = "/",
+    path = "",
     tag = "JSON",
     params(
         ("x-server-version" = String, Header, description = "Server version", example = "v0.1.0")
     ),
     responses(
         (status = 200, description = "User created successfully", body = Message),
+        (status = 400, description = "Missing header 'x-server-version'"),
+        (status = 500, description = "Internal server error"),
     )
 )]
 async fn handler_json(State(pool): State<PgPool>, headers: HeaderMap) -> Response {
@@ -190,6 +193,86 @@ async fn handler_json(State(pool): State<PgPool>, headers: HeaderMap) -> Respons
         .into_response()
 }
 
+// Authentication handler.
+/// Authenticate user
+///
+/// Authenticate user with email and password.
+#[utoipa::path(
+    post,
+    path = "/auth",
+    tag = "Authentication",
+    request_body = UserAuthRequest,
+    responses(
+        (status = 200, description = "User authenticated successfully", body = UserAuthResponse),
+        (status = 401, description = "Unauthorized error", body = ApiError),
+        (status = 422, description = "Unprocessable request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    )
+)]
+async fn authenticate_user(
+    State(pool): State<PgPool>,
+    Json(user_auth_request): Json<UserAuthRequest>,
+) -> Result<Response, AppError> {
+    // validate user auth request.
+    match user_auth_request.validate() {
+        Ok(_) => (),
+        Err(e) => {
+            return Err(AppError::new(
+                ErrorType::RequestValidationError {
+                    validation_error: e,
+                    object: "UserAuthRequest".to_string(),
+                },
+                "Validation error. Check the request body.",
+            ));
+        }
+    }
+
+    let user = sqlx::query_as!(
+        Users,
+        "SELECT * FROM sqlx_users WHERE email = $1",
+        user_auth_request.email
+    )
+    .fetch_one(&pool)
+    .await;
+
+    let argon2 = Argon2::default();
+    match user {
+        Ok(user) => {
+            let password_hash = PasswordHash::new(&user.password_hash).unwrap();
+            if argon2
+                .verify_password(user_auth_request.password.as_bytes(), &password_hash)
+                .is_ok()
+            {
+                // Generate JWT token and return.
+                Ok((
+                    StatusCode::OK,
+                    Json(UserAuthResponse {
+                        token: "dummy.token.here".to_string(),
+                    }),
+                )
+                    .into_response())
+            } else {
+                // Invalid credentials.
+                Err(AppError::new(
+                    ErrorType::UnauthorizedError,
+                    "Invalid credentials. Check email and password.",
+                ))
+            }
+        }
+        Err(_) => {
+            // User not found.
+            // Still trigger a dummy check to avoid returning immediately.
+            // Which can be used by hacker to figure out user id is not valid.
+            let password_hash = PasswordHash::new("$argon2id$v=19$m=65536,t=4,p=5$UNsE4Dxg3nVM4JeInGjJxw$b6uObfrK8qbCJMQr9VVDuDizRhxCZl4zXwZWbhERMaGjPvcBsHZmcbAwXsUPqtekDwkf4u3qiVKG/maAR+7BdA").unwrap();
+            let _ = argon2.verify_password("dummy".as_bytes(), &password_hash);
+            Err(AppError::new(
+                ErrorType::UnauthorizedError,
+                "Invalid credentials. Check email and password.",
+            ))
+        }
+    }
+}
+
 // POST create user handler.
 /// Create user
 ///
@@ -201,7 +284,7 @@ async fn handler_json(State(pool): State<PgPool>, headers: HeaderMap) -> Respons
     tag = "Users",
     responses(
         (status = 201, description = "User created successfully", body = StoredUser),
-        (status = 400, description = "Unprocessable request", body = ApiError),
+        (status = 422, description = "Unprocessable request", body = ApiError),
         (status = 500, description = "Internal server error", body = ApiError),
     )
 )]
@@ -462,6 +545,22 @@ struct UserRequest {
     email: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
+#[serde(rename_all = "camelCase")]
+struct UserAuthRequest {
+    #[validate(email(message = "Invalid email address"))]
+    #[schema(example = "me@example.com")]
+    email: String,
+
+    #[validate(length(
+        min = 12,
+        max = 255,
+        message = "Password must be between 12 and 255 characters"
+    ))]
+    #[schema(example = "SecretPassword123!")]
+    password: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct UpdateUserRequest {
@@ -469,18 +568,6 @@ struct UpdateUserRequest {
     first_name: Option<String>,
     #[schema(example = "Doe")]
     last_name: Option<String>,
-}
-
-#[derive(Debug, FromRow)]
-struct Users {
-    id: String,
-    first_name: Option<String>,
-    last_name: String,
-    email: String,
-    password_hash: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-    deleted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -494,6 +581,15 @@ struct StoredUser {
     last_name: String,
     #[schema(example = "me@example.com")]
     email: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+struct UserAuthResponse {
+    #[schema(
+        example = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    )]
+    token: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -539,6 +635,21 @@ struct PaginationQuery {
 }
 
 // -- ---------------------
+// -- Entities
+// -- ---------------------
+#[derive(Debug, FromRow)]
+struct Users {
+    id: String,
+    first_name: Option<String>,
+    last_name: String,
+    email: String,
+    password_hash: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    deleted_at: Option<DateTime<Utc>>,
+}
+
+// -- ---------------------
 // -- Global error handling.
 // -- ---------------------
 
@@ -557,6 +668,8 @@ pub enum ErrorType {
     BadRequest,
     #[display(fmt = "Internal server error")]
     InternalServerError,
+    #[display(fmt = "Authentication error")]
+    UnauthorizedError,
     #[display(fmt = "Request validation error")]
     RequestValidationError {
         validation_error: ValidationErrors,
@@ -591,10 +704,15 @@ struct ApiError {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ValidationError {
+    #[schema(example = "Users")]
     object: String,
+    #[schema(example = "email")]
     field: String,
+    #[schema(example = "notAValidEmail")]
     rejected_value: String,
+    #[schema(example = "Invalid email address")]
     message: String,
+    #[schema(example = "email.invalid")]
     code: String,
 }
 
@@ -617,6 +735,12 @@ impl IntoResponse for AppError {
             ),
             ErrorType::InternalServerError => (
                 StatusCode::INTERNAL_SERVER_ERROR,
+                self.error_type.to_string(),
+                Some(self.error_message),
+                vec![],
+            ),
+            ErrorType::UnauthorizedError => (
+                StatusCode::UNAUTHORIZED,
                 self.error_type.to_string(),
                 Some(self.error_message),
                 vec![],

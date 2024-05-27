@@ -11,10 +11,13 @@ use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use bb8_redis::{bb8, RedisConnectionManager};
+use bb8_redis::bb8::Pool;
 use derive_more::{Display, Error};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use nid::alphabet::Base64UrlAlphabet;
 use nid::Nanoid;
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::types::chrono::{DateTime, Utc};
@@ -42,6 +45,7 @@ async fn main() {
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let server_host = env::var("SERVER_HOST").expect("Error getting server host");
     let server_port = env::var("SERVER_PORT").expect("Error getting server port");
+    let redis_url = env::var("REDIS_URL").expect("Error getting redis host");
     let server_addr = server_host + ":" + &*server_port;
 
     // Setup connection pool.
@@ -61,6 +65,16 @@ async fn main() {
         .run(&pool)
         .await
         .expect("Failed to migrate database");
+
+    // Setup Redis connection.
+    let manager = RedisConnectionManager::new(redis_url)
+        .expect("Failed to create Redis connection manager");
+    let redis_pool = bb8::Pool::builder().min_idle(5).build(manager).await.unwrap();
+
+    let state = AppState {
+        pg_pool: pool,
+        redis_pool: redis_pool,
+    };
 
     // OpenAPI documentation.
     #[derive(OpenApi)]
@@ -112,7 +126,7 @@ async fn main() {
         .route("/auth", post(authenticate_user))
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .fallback(page_not_found)
-        .with_state(pool)
+        .with_state(state)
         .layer(CompressionLayer::new())
         .layer(TimeoutLayer::new(Duration::from_secs(5)))
         .layer(cors);
@@ -161,7 +175,11 @@ async fn page_not_found() -> Response {
         (status = 500, description = "Internal server error"),
     )
 )]
-async fn handler_json(State(pool): State<PgPool>, headers: HeaderMap) -> Response {
+async fn handler_json(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    // Creating a Redis connection and setting a key value.
+    let mut redis_con = state.redis_pool.get().await.unwrap();
+    let _: () = redis_con.set("hello", "world").await.unwrap();
+
     // Get custom header from Request header.
     let header_value = match headers.get("x-server-version") {
         Some(header) => match header.to_str() {
@@ -185,8 +203,9 @@ async fn handler_json(State(pool): State<PgPool>, headers: HeaderMap) -> Respons
     info!("Header Value -> {}", header_value);
 
     // Make a simple query to return the given parameter (use a question mark `?` instead of `$1` for MySQL)
-    let response: Result<(String,), Error> =
-        sqlx::query_as("SELECT 'Hello'").fetch_one(&pool).await;
+    let response: Result<(String,), Error> = sqlx::query_as("SELECT 'Hello'")
+        .fetch_one(&state.pg_pool)
+        .await;
     match response {
         Ok(r) => info!("DB Response -> {}", r.0),
         Err(e) => info!("Error getting data {}", e),
@@ -220,7 +239,7 @@ async fn handler_json(State(pool): State<PgPool>, headers: HeaderMap) -> Respons
     )
 )]
 async fn authenticate_user(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     Json(user_auth_request): Json<UserAuthRequest>,
 ) -> Result<Response, AppError> {
     // validate user auth request.
@@ -242,7 +261,7 @@ async fn authenticate_user(
         "SELECT * FROM sqlx_users WHERE email = $1",
         user_auth_request.email
     )
-    .fetch_one(&pool)
+    .fetch_one(&state.pg_pool)
     .await;
 
     let argon2 = Argon2::default();
@@ -309,10 +328,10 @@ async fn authenticate_user(
     )
 )]
 async fn handler_create_user(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     Json(user_request): Json<UserRequest>,
 ) -> Response {
-    create_user(pool, user_request).await.into_response()
+    create_user(state.pg_pool, user_request).await.into_response()
 }
 
 async fn create_user(pool: PgPool, user_request: UserRequest) -> Result<Response, AppError> {
@@ -390,17 +409,17 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Result<Response
     )
 )]
 async fn get_users(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     Query(query): Query<PaginationQuery>,
 ) -> Result<Response, AppError> {
     let page = query.page;
     let limit = query.size;
     let users = sqlx::query_as!(Users, "SELECT * FROM sqlx_users WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $1 OFFSET $2", limit, (page - 1) * limit)
-        .fetch_all(&pool)
+        .fetch_all(&state.pg_pool)
         .await;
 
     let count = sqlx::query!("SELECT COUNT(*) FROM sqlx_users WHERE deleted_at IS NULL")
-        .fetch_one(&pool)
+        .fetch_one(&state.pg_pool)
         .await
         .unwrap();
     let items_in_page = users.as_ref().unwrap().len();
@@ -443,11 +462,11 @@ async fn get_users(
     )
 )]
 async fn get_user_by_id(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
     let user = sqlx::query_as!(Users, "SELECT * FROM sqlx_users WHERE id = $1", id)
-        .fetch_one(&pool)
+        .fetch_one(&state.pg_pool)
         .await;
 
     match user {
@@ -482,7 +501,7 @@ async fn get_user_by_id(
     )
 )]
 async fn update_user(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
     Json(update_user_request): Json<UpdateUserRequest>,
 ) -> Result<Response, AppError> {
@@ -513,7 +532,7 @@ async fn update_user(
     for param in &params {
         query = query.bind(param);
     }
-    let result: Result<Users, Error> = query.fetch_one(&pool).await;
+    let result: Result<Users, Error> = query.fetch_one(&state.pg_pool).await;
 
     match result {
         Ok(user) => Ok((
@@ -551,7 +570,7 @@ async fn update_user(
     )
 )]
 async fn delete_user(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
     let result = sqlx::query_as!(
@@ -559,7 +578,7 @@ async fn delete_user(
         "UPDATE sqlx_users SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL",
         id
     )
-    .fetch_one(&pool)
+    .fetch_one(&state.pg_pool)
     .await;
 
     match result {
@@ -571,6 +590,12 @@ async fn delete_user(
 // -- ---------------------
 // -- Structs for request, response and entities.
 // -- ---------------------
+#[derive(Clone)]
+struct AppState {
+    pg_pool: PgPool,
+    redis_pool: Pool<RedisConnectionManager>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct UserRequest {

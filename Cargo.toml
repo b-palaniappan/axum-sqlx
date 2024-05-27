@@ -47,6 +47,10 @@ derive_more = "^0"
 utoipa = { version = "^4", features = ["axum_extras", "chrono"] }
 utoipa-scalar = { version = "^0", features = ["axum"] }
 
+# Caching
+redis = { version = "^0", features = ["tokio-comp"] }
+bb8-redis = "^0"
+
 # rest api client
 reqwest = "^0"
 

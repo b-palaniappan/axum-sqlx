@@ -22,8 +22,26 @@ docker run --name local-postgres -e POSTGRES_PASSWORD=D0eFU4uh6sav4X64HurgN -p 5
 - [x] Argon2id password hashing algorithm.
 - [x] Add openapi / Swagger UI documentation.
 - [ ] JWT token based authentication and authorization.
+- [ ] Add caching with Redis.
+- [ ] Add logging using tracing.
 - [ ] Add secret manager to store secrets.
 - [ ] Rest api client using reqwest. 
 - [ ] Unit and Integration testing.
 - [ ] Dockerize the application.
 - [ ] CI/CD pipeline using GitHub Actions.
+
+## Caching
+- Use Redis as cache store.
+- When use login-in create a JWT token and store the user profile info, permissions and roles in Redis with TTL of 1 day, which is same as JWT token expiry.
+- On each JWT token check, validate the token and get the user profile info from Redis to get the permissions and roles.
+- On logout, or token expiry, delete the user profile info from Redis.
+
+## Roles and Permissions
+### Roles
+- ADMIN
+- USER
+- SERVICE
+
+### Permissions
+- READ
+- WRITE

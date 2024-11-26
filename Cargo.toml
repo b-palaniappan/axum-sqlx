@@ -7,8 +7,8 @@ edition = "2021"
 
 # to Reduce the size of release binary.
 [profile.release]
-strip = true  # Automatically strip symbols from the binary.
-opt-level = "z"  # Optimize for size.
+strip = true      # Automatically strip symbols from the binary.
+opt-level = "z"   # Optimize for size.
 lto = true
 codegen-units = 1
 panic = "abort"
@@ -16,21 +16,30 @@ panic = "abort"
 [dependencies]
 # core axum library
 axum = { version = "^0" }
-axum-extra = "^0"
 
 # Tower dependencies
-tower-http = { version = "^0", features = ["cors", "compression-full", "timeout"] }
+tower-http = { version = "^0", features = [
+  "cors",
+  "compression-full",
+  "timeout",
+] }
 
 # JSON parser
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = "^1.0"
 
 # SQL with PostgreSQL.
-sqlx = { version = "^0", features = ["postgres", "runtime-tokio", "chrono", "json"] }
+sqlx = { version = "^0", features = [
+  "postgres",
+  "runtime-tokio",
+  "chrono",
+  "json",
+] }
 
 # Security
 argon2 = "^0"
 jsonwebtoken = "^9"
+hmac = "^0"
 
 # Async
 tokio = { version = "^1.0", features = ["macros", "rt-multi-thread"] }
@@ -44,7 +53,7 @@ validator = { version = "^0", features = ["derive"] }
 derive_more = "^0"
 
 # OpenAPI / Swagger UI.
-utoipa = { version = "^4", features = ["axum_extras", "chrono"] }
+utoipa = { version = "^5", features = ["axum_extras", "chrono"] }
 utoipa-scalar = { version = "^0", features = ["axum"] }
 
 # Caching
@@ -57,3 +66,4 @@ reqwest = "^0"
 # Utils
 dotenvy = "^0"
 nid = "^3"
+sha2 = "0.10.8"

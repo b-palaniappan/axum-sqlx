@@ -11,14 +11,16 @@ use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use bb8_redis::{bb8, RedisConnectionManager};
 use bb8_redis::bb8::Pool;
+use bb8_redis::RedisConnectionManager;
 use derive_more::{Display, Error};
+use hmac::{Hmac, Mac};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use nid::alphabet::Base64UrlAlphabet;
 use nid::Nanoid;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
+use sha2::Sha512;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{Error, FromRow, PgPool};
@@ -46,6 +48,7 @@ async fn main() {
     let server_host = env::var("SERVER_HOST").expect("Error getting server host");
     let server_port = env::var("SERVER_PORT").expect("Error getting server port");
     let redis_url = env::var("REDIS_URL").expect("Error getting redis host");
+    let hmac_key = env::var("HMAC_SECRET").expect("Error getting HMAC secret");
     let server_addr = server_host + ":" + &*server_port;
 
     // Setup connection pool.
@@ -67,13 +70,14 @@ async fn main() {
         .expect("Failed to migrate database");
 
     // Setup Redis connection.
-    let manager = RedisConnectionManager::new(redis_url)
-        .expect("Failed to create Redis connection manager");
-    let redis_pool = bb8::Pool::builder().min_idle(5).build(manager).await.unwrap();
+    let manager =
+        RedisConnectionManager::new(redis_url).expect("Failed to create Redis connection manager");
+    let redis_pool = Pool::builder().min_idle(5).build(manager).await.unwrap();
 
     let state = AppState {
         pg_pool: pool,
-        redis_pool: redis_pool,
+        redis_pool,
+        hmac_key,
     };
 
     // OpenAPI documentation.
@@ -85,7 +89,7 @@ async fn main() {
             (name = "Users", description = "User management API")
         ),
         paths(handler_create_user, get_users, get_user_by_id, update_user, handler_json, authenticate_user, delete_user),
-        components(schemas(UserRequest, UpdateUserRequest, StoredUser, StoredUsers, Message, AppError, ApiError, ValidationError, UserAuthRequest, UserAuthResponse)),
+        components(schemas(UserRequest, UpdateUserRequest, StoredUser, StoredUsers, Message, ApiError, ValidationError, UserAuthRequest, UserAuthResponse)),
     )]
     struct ApiDoc;
     struct SecurityAddon;
@@ -268,10 +272,29 @@ async fn authenticate_user(
     match user {
         Ok(user) => {
             let password_hash = PasswordHash::new(&user.password_hash).unwrap();
+            let password_hmac = &user.password_hmac;
             if argon2
                 .verify_password(user_auth_request.password.as_bytes(), &password_hash)
                 .is_ok()
             {
+                let mut mac = match Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()) {
+                    Ok(mac) => mac,
+                    Err(_) => {
+                        return Err(AppError::new(
+                            ErrorType::UnauthorizedError,
+                            "Invalid credentials. Check email and password.",
+                        ))
+                    }
+                };
+                mac.update(&user.password_hash.as_bytes());
+                let result = mac.verify_slice(&password_hmac[..]);
+                if result.is_err() {
+                    return Err(AppError::new(
+                        ErrorType::UnauthorizedError,
+                        "Invalid credentials. Check email and password.",
+                    ));
+                }
+
                 let now = Utc::now();
                 let jti: Nanoid<32, Base64UrlAlphabet> = Nanoid::new();
                 let user_claim = Claims {
@@ -331,10 +354,15 @@ async fn handler_create_user(
     State(state): State<AppState>,
     Json(user_request): Json<UserRequest>,
 ) -> Response {
-    create_user(state.pg_pool, user_request).await.into_response()
+    create_user(State(state), user_request)
+        .await
+        .into_response()
 }
 
-async fn create_user(pool: PgPool, user_request: UserRequest) -> Result<Response, AppError> {
+async fn create_user(
+    State(state): State<AppState>,
+    user_request: UserRequest,
+) -> Result<Response, AppError> {
     match user_request.validate() {
         Ok(_) => (),
         Err(e) => {
@@ -362,15 +390,29 @@ async fn create_user(pool: PgPool, user_request: UserRequest) -> Result<Response
         )
         .unwrap();
 
+    // create HMAC of hashed password for integrate check.
+    let mut mac = match Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()) {
+        Ok(mac) => mac,
+        Err(_) => {
+            return Err(AppError::new(
+                ErrorType::UnauthorizedError,
+                "Invalid credentials. Check email and password.",
+            ))
+        }
+    };
+    mac.update(password_hash.to_string().as_bytes());
+    let result = mac.finalize();
+
     let result = sqlx::query!(
-        "INSERT INTO sqlx_users (id, first_name, last_name, email, password_hash) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+        "INSERT INTO sqlx_users (id, first_name, last_name, email, password_hash, password_hmac) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
         user_id.to_string(),
         user_request.first_name,
         &user_request.last_name,
         &user_request.email,
-        password_hash.to_string()
+        password_hash.to_string(),
+        &result.into_bytes().to_vec(),
     )
-        .fetch_one(&pool)
+        .fetch_one(&state.pg_pool)
         .await;
 
     match result {
@@ -594,6 +636,7 @@ async fn delete_user(
 struct AppState {
     pg_pool: PgPool,
     redis_pool: Pool<RedisConnectionManager>,
+    hmac_key: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
@@ -734,6 +777,7 @@ struct Users {
     last_name: String,
     email: String,
     password_hash: String,
+    password_hmac: Vec<u8>,
     #[allow(dead_code)]
     created_at: DateTime<Utc>,
     #[allow(dead_code)]
@@ -747,13 +791,14 @@ struct Users {
 // -- ---------------------
 
 // New error data type.
-#[derive(ToSchema)]
+// #[derive(ToSchema)]
+// TODO: Getting error for ToSchema for ValidationErrors from validator.
 pub struct AppError {
     error_type: ErrorType,
     error_message: String,
 }
 
-#[derive(Debug, Display, Error, Clone, ToSchema)]
+#[derive(Debug, Display, Error, Clone)]
 pub enum ErrorType {
     #[display(fmt = "Not found")]
     NotFound,

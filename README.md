@@ -25,7 +25,7 @@ docker run --name local-postgres -e POSTGRES_PASSWORD=D0eFU4uh6sav4X64HurgN -p 5
 - [ ] Add caching with Redis.
 - [ ] Add logging using tracing.
 - [ ] Add secret manager to store secrets.
-- [ ] Rest api client using reqwest. 
+- [ ] Rest api client using reqwest.
 - [ ] Unit and Integration testing.
 - [ ] Dockerize the application.
 - [ ] CI/CD pipeline using GitHub Actions.

@@ -50,7 +50,7 @@ tracing-subscriber = { version = "^0", features = ["env-filter"] }
 
 # Validation
 validator = { version = "^0", features = ["derive"] }
-derive_more = "^0"
+derive_more = { version ="^1", features = ["display", "error"] }
 
 # OpenAPI / Swagger UI.
 utoipa = { version = "^5", features = ["axum_extras", "chrono"] }
@@ -59,9 +59,6 @@ utoipa-scalar = { version = "^0", features = ["axum"] }
 # Caching
 redis = { version = "^0", features = ["tokio-comp"] }
 bb8-redis = "^0"
-
-# rest api client
-reqwest = "^0"
 
 # Utils
 dotenvy = "^0"

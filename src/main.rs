@@ -13,7 +13,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use bb8_redis::bb8::Pool;
 use bb8_redis::RedisConnectionManager;
-use derive_more::{Display, Error};
+use derive_more::Display;
 use hmac::{Hmac, Mac};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use nid::alphabet::Base64UrlAlphabet;
@@ -798,17 +798,17 @@ pub struct AppError {
     error_message: String,
 }
 
-#[derive(Debug, Display, Error, Clone)]
+#[derive(Debug, Display, derive_more::Error, Clone)]
 pub enum ErrorType {
-    #[display(fmt = "Not found")]
+    #[display("Not found")]
     NotFound,
-    #[display(fmt = "Bad request")]
+    #[display("Bad request")]
     BadRequest,
-    #[display(fmt = "Internal server error")]
+    #[display("Internal server error")]
     InternalServerError,
-    #[display(fmt = "Authentication error")]
+    #[display("Authentication error")]
     UnauthorizedError,
-    #[display(fmt = "Request validation error")]
+    #[display("Request validation error")]
     RequestValidationError {
         validation_error: ValidationErrors,
         object: String,

@@ -16,8 +16,7 @@ use bb8_redis::RedisConnectionManager;
 use derive_more::Display;
 use hmac::{Hmac, Mac};
 use jsonwebtoken::{encode, EncodingKey, Header};
-use nid::alphabet::Base64UrlAlphabet;
-use nid::Nanoid;
+use nanoid::nanoid;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sha2::Sha512;
@@ -62,12 +61,6 @@ async fn main() {
             panic!("Failed to create database connection pool: {}", e);
         })
         .unwrap();
-
-    // Trigger SQLx migration.
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .expect("Failed to migrate database");
 
     // Setup Redis connection.
     let manager =
@@ -296,11 +289,11 @@ async fn authenticate_user(
                 }
 
                 let now = Utc::now();
-                let jti: Nanoid<32, Base64UrlAlphabet> = Nanoid::new();
+                let jti = nanoid!();
                 let user_claim = Claims {
                     sub: user.id,
                     iss: JWT_TOKEN_ISSUER.to_string(),
-                    jti: jti.to_string(),
+                    jti,
                     iat: now.timestamp(),
                     nbf: now.timestamp(),
                     exp: now.add(Duration::from_secs(JWT_TOKEN_EXPIRY)).timestamp(),
@@ -375,7 +368,7 @@ async fn create_user(
             ));
         }
     }
-    let user_id: Nanoid<24, Base64UrlAlphabet> = Nanoid::new();
+    let user_id = nanoid!();
 
     // Hash password using Argon2.
     let salt = SaltString::generate(&mut OsRng);

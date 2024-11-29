@@ -1,16 +1,3 @@
-## Password handling
-
-### Local Setup
-- Setup PostgreSQL DB in local.
-- Setup ValKey server in local.
-
-### TODO
-- [x] Add password hashing using Argon2id.
-- [x] Add password HMAC using HMAC-SHA512.
-- [ ] Add email validation token on registration.
-
-### DDL for Auth related tables
-```sql
 -- Create ENUM type
 CREATE TYPE account_status AS ENUM ('ACTIVE', 'INACTIVE', 'PENDING', 'LOCKED', 'DELETED');
 CREATE TYPE two_factor_method AS ENUM ('EMAIL', 'SMS', 'TOTP', 'PASSKEY');
@@ -32,6 +19,7 @@ CREATE TABLE users
     created_at            TIMESTAMP WITH TIME ZONE     DEFAULT CURRENT_TIMESTAMP,
     updated_at            TIMESTAMP WITH TIME ZONE     DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX idx_users_email ON users (email);
 
 -- Password Reset Tokens Table:
 CREATE TABLE password_reset_tokens
@@ -49,7 +37,7 @@ CREATE TABLE password_reset_tokens
 -- Index for token lookups
 CREATE INDEX idx_password_reset_tokens_token ON password_reset_tokens (token) WHERE is_valid = TRUE;
 
--- Two Factor Authentication Table
+-- Two-Factor Authentication Table
 CREATE TABLE user_2fa_methods
 (
     id           BIGSERIAL PRIMARY KEY,
@@ -104,9 +92,9 @@ CREATE TABLE two_factor_backups
     CONSTRAINT unique_backup_codes UNIQUE (user_id, backup_code)
 );
 
--- list of `remember this device` devices after 2FA.
--- Just use cookies for this, and make sure the cookie is signed and encrypted.
--- the cookie value should be in the trusted device table.
+-- List of `remember this device` devices after 2FA.
+-- Use cookies for this, and make sure the cookie is signed and encrypted.
+-- The cookie value should be in the trusted device table.
 CREATE TABLE two_factor_devices
 (
     id                 BIGSERIAL PRIMARY KEY,
@@ -140,13 +128,13 @@ CREATE TABLE auth_audit_log
 (
     id              BIGSERIAL PRIMARY KEY,
     user_id         BIGINT      NOT NULL REFERENCES users (id),
-    event_type      event_type  NOT NULL, -- 'LOGIN', 'PASSWORD_RESET', '2FA_ATTEMPT', etc.
+    event_type      event_type  NOT NULL,
     status          VARCHAR(50) NOT NULL,
     ip_address      INET,
     user_agent      TEXT,
-    device_id       UUID REFERENCES two_factor_devices (id),
+    device_id       BIGINT REFERENCES two_factor_devices (id),
     timestamp       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    additional_info JSONB                 -- store additional info as JSON
+    additional_info JSONB -- store additional info as JSON
 );
 
 -- HMAC version table for key rotation
@@ -161,4 +149,3 @@ CREATE TABLE hmac_key_versions
     status       VARCHAR(20)  NOT NULL    DEFAULT 'PENDING',
     CONSTRAINT unique_active_version UNIQUE (version, status)
 );
-```

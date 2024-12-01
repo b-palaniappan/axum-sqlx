@@ -6,18 +6,20 @@ CREATE TYPE event_type AS ENUM ('LOGIN', 'LOGIN_FAILED', 'PASSWORD_RESET', '2FA_
 CREATE TABLE users
 (
     id                    BIGSERIAL PRIMARY KEY,
-    key                   char(21) UNIQUE     NOT NULL,
-    email                 VARCHAR(255) UNIQUE NOT NULL,
-    password_hash         VARCHAR(255)        NOT NULL,
-    password_hmac         VARCHAR(255)        NOT NULL,
-    email_verified        BOOLEAN                      DEFAULT FALSE,
-    update_password       BOOLEAN                      DEFAULT FALSE,
-    two_factor_enabled    BOOLEAN                      DEFAULT FALSE,
-    account_status        account_status      NOT NULL DEFAULT 'ACTIVE',
+    key                   char(21) UNIQUE                                    NOT NULL,
+    first_name            VARCHAR(255),
+    last_name             VARCHAR(255)                                       NOT NULL,
+    email                 VARCHAR(255) UNIQUE                                NOT NULL,
+    password_hash         VARCHAR(255)                                       NOT NULL,
+    password_hmac         BYTEA                                              NOT NULL,
+    email_verified        BOOLEAN                  DEFAULT FALSE,
+    update_password       BOOLEAN                  DEFAULT FALSE,
+    two_factor_enabled    BOOLEAN                  DEFAULT FALSE,
+    account_status        account_status                                     NOT NULL DEFAULT 'ACTIVE',
     last_login            TIMESTAMP WITH TIME ZONE,
-    failed_login_attempts INTEGER                      DEFAULT 0,
-    created_at            TIMESTAMP WITH TIME ZONE     DEFAULT CURRENT_TIMESTAMP,
-    updated_at            TIMESTAMP WITH TIME ZONE     DEFAULT CURRENT_TIMESTAMP
+    failed_login_attempts INTEGER                  DEFAULT 0,
+    created_at            TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at            TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 CREATE INDEX idx_users_email ON users (email);
 
@@ -149,3 +151,7 @@ CREATE TABLE hmac_key_versions
     status       VARCHAR(20)  NOT NULL    DEFAULT 'PENDING',
     CONSTRAINT unique_active_version UNIQUE (version, status)
 );
+
+-- Create a Fake User with password hash and HMAC.
+INSERT INTO public.users (key, first_name, last_name, email, password_hash, password_hmac)
+VALUES ('I6xHB0IX5DtT-SnkGEyYJ', 'Fakefname', 'Fakelname', 'fake_user@c12.io', '$argon2id$v=19$m=65536,t=4,p=5$F4mRS8vqq+4+okygQ9oYew$e5Mgx35RcnEYHqZlYKVmP88fo9wiDPtATpbZGVOn+GTzmhL7dPkLZK6whLbvYMKauWKae3Fc8BgOpCwArmqjJw', E'\\xCA8FC3E87FC2066870E79AF15BFD678754B9FC6CCF9D79EDED8BE21218AF115EB15CB5070E7C5DA769E20B2ABF03A40E3E631CC8290DF4C28D1C8EA83C3CD43B');

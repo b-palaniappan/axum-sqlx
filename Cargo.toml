@@ -8,7 +8,7 @@ edition = "2021"
 # to Reduce the size of release binary.
 [profile.release]
 strip = true      # Automatically strip symbols from the binary.
-opt-level = "z"   # Optimize for size.
+opt-level = 3   # Optimize for size. Options are 0, 1, 2, 3, s, or z. More info at https://doc.rust-lang.org/cargo/reference/profiles.html#opt-level
 lto = true
 codegen-units = 1
 panic = "abort"

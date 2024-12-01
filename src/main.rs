@@ -1,6 +1,7 @@
 use std::env;
 use std::net::SocketAddr;
 use std::ops::Add;
+use std::string::ToString;
 use std::time::Duration;
 
 use argon2::password_hash::rand_core::OsRng;
@@ -22,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha512;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::types::chrono::{DateTime, Utc};
-use sqlx::{Error, FromRow, PgPool};
+use sqlx::{Error, FromRow, PgPool, Type};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -255,7 +256,11 @@ async fn authenticate_user(
 
     let user = sqlx::query_as!(
         Users,
-        "SELECT * FROM sqlx_users WHERE email = $1",
+        r#"
+        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled, 
+        account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at 
+        FROM users WHERE email = $1
+        "#,
         user_auth_request.email
     )
     .fetch_one(&state.pg_pool)
@@ -266,6 +271,8 @@ async fn authenticate_user(
         Ok(user) => {
             let password_hash = PasswordHash::new(&user.password_hash).unwrap();
             let password_hmac = &user.password_hmac;
+            let user_id = user.id;
+            // TODO: Only to auth check if the user status is active.
             if argon2
                 .verify_password(user_auth_request.password.as_bytes(), &password_hash)
                 .is_ok()
@@ -273,6 +280,7 @@ async fn authenticate_user(
                 let mut mac = match Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()) {
                     Ok(mac) => mac,
                     Err(_) => {
+                        user_authentication_failed(State(state), user_id).await;
                         return Err(AppError::new(
                             ErrorType::UnauthorizedError,
                             "Invalid credentials. Check email and password.",
@@ -282,6 +290,7 @@ async fn authenticate_user(
                 mac.update(&user.password_hash.as_bytes());
                 let result = mac.verify_slice(&password_hmac[..]);
                 if result.is_err() {
+                    user_authentication_failed(State(state), user_id).await;
                     return Err(AppError::new(
                         ErrorType::UnauthorizedError,
                         "Invalid credentials. Check email and password.",
@@ -291,7 +300,7 @@ async fn authenticate_user(
                 let now = Utc::now();
                 let jti = nanoid!();
                 let user_claim = Claims {
-                    sub: user.id,
+                    sub: user.key,
                     iss: JWT_TOKEN_ISSUER.to_string(),
                     jti,
                     iat: now.timestamp(),
@@ -304,10 +313,13 @@ async fn authenticate_user(
                     &EncodingKey::from_secret(JWT_TOKEN_SECRET.as_ref()),
                 )
                 .unwrap();
+                reset_failed_login_attempts(State(state), user_id).await;
+                // TODO: Store the token in Redis for revoking.
                 // Generate JWT token and return.
                 Ok((StatusCode::OK, Json(UserAuthResponse { token })).into_response())
             } else {
                 // Invalid credentials.
+                user_authentication_failed(State(state), user_id).await;
                 Err(AppError::new(
                     ErrorType::UnauthorizedError,
                     "Invalid credentials. Check email and password.",
@@ -316,7 +328,7 @@ async fn authenticate_user(
         }
         Err(_) => {
             // User not found.
-            // Still trigger a dummy check to avoid returning immediately.
+            // Still trigger a fake check to avoid returning immediately.
             // Which can be used by hacker to figure out user id is not valid.
             let password_hash = PasswordHash::new(DUMMY_HASHED_PASSWORD).unwrap();
             let _ = argon2.verify_password("dummy".as_bytes(), &password_hash);
@@ -325,6 +337,53 @@ async fn authenticate_user(
                 "Invalid credentials. Check email and password.",
             ))
         }
+    }
+}
+
+// Update failed login attempts for user.
+async fn user_authentication_failed(State(state): State<AppState>, user_id: i64) {
+    let result = sqlx::query!(
+        "UPDATE users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = $1",
+        user_id
+    )
+    .execute(&state.pg_pool)
+    .await;
+    match result {
+        Ok(_) => {
+            // If login attempts exceed 5, lock the account.
+            let user = sqlx::query_as!(
+                Users,
+                r#"
+                SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled, 
+                account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at 
+                FROM users WHERE id = $1
+                "#,
+                user_id
+            );
+            let user = user.fetch_one(&state.pg_pool).await.unwrap();
+            if user.failed_login_attempts.unwrap_or(0) >= 5 {
+                let _ = sqlx::query!(
+                    "UPDATE users SET account_status = 'LOCKED' WHERE id = $1",
+                    user_id
+                )
+                .execute(&state.pg_pool)
+                .await;
+            }
+        },
+        Err(e) => error!("Error updating failed login attempts: {:?}", e),
+    }
+}
+
+async fn reset_failed_login_attempts(State(state): State<AppState>, user_id: i64) {
+    let result = sqlx::query!(
+        "UPDATE users SET failed_login_attempts = 0 WHERE id = $1",
+        user_id
+    )
+    .execute(&state.pg_pool)
+    .await;
+    match result {
+        Ok(_) => (),
+        Err(e) => error!("Error resetting failed login attempts: {:?}", e),
     }
 }
 
@@ -368,7 +427,7 @@ async fn create_user(
             ));
         }
     }
-    let user_id = nanoid!();
+    let user_key = nanoid!();
 
     // Hash password using Argon2.
     let salt = SaltString::generate(&mut OsRng);
@@ -394,16 +453,21 @@ async fn create_user(
         }
     };
     mac.update(password_hash.to_string().as_bytes());
-    let result = mac.finalize();
+    let password_hmac = mac.finalize();
 
     let result = sqlx::query!(
-        "INSERT INTO sqlx_users (id, first_name, last_name, email, password_hash, password_hmac) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
-        user_id.to_string(),
+        r#"
+        INSERT INTO users (key, first_name, last_name, email, password_hash, password_hmac) 
+        VALUES ($1, $2, $3, $4, $5, $6) 
+        RETURNING id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, 
+        two_factor_enabled, account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at
+        "#,
+        user_key,
         user_request.first_name,
         &user_request.last_name,
         &user_request.email,
         password_hash.to_string(),
-        &result.into_bytes().to_vec(),
+        &password_hmac.into_bytes().to_vec(),
     )
         .fetch_one(&state.pg_pool)
         .await;
@@ -411,24 +475,27 @@ async fn create_user(
     match result {
         Ok(user) => Ok((
             StatusCode::CREATED,
-            [(header::LOCATION, format!("/users/{}", user.id))],
+            [(header::LOCATION, format!("/users/{}", user.key))],
             Json(StoredUser {
-                id: user.id,
+                key: user.key,
                 first_name: user.first_name,
                 last_name: user.last_name,
                 email: user.email,
             }),
         )
             .into_response()),
-        Err(_) => Err(AppError::new(
-            ErrorType::InternalServerError,
-            "Error creating user",
-        )),
+        Err(e) => {
+            error!("Error creating user. {:?}", e);
+            Err(AppError::new(
+                ErrorType::InternalServerError,
+                "Error creating user",
+            ))
+        },
     }
 }
 
 // GET all user handler with pagination.
-/// Get list of users
+/// Get a list of users
 ///
 /// Get a list of users with pagination.
 #[utoipa::path(
@@ -449,11 +516,20 @@ async fn get_users(
 ) -> Result<Response, AppError> {
     let page = query.page;
     let limit = query.size;
-    let users = sqlx::query_as!(Users, "SELECT * FROM sqlx_users WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $1 OFFSET $2", limit, (page - 1) * limit)
-        .fetch_all(&state.pg_pool)
-        .await;
+    let users = sqlx::query_as!(
+        Users,
+        r#"
+        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled, 
+        account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at
+        FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2
+        "#,
+        limit,
+        (page - 1) * limit
+    )
+    .fetch_all(&state.pg_pool)
+    .await;
 
-    let count = sqlx::query!("SELECT COUNT(*) FROM sqlx_users WHERE deleted_at IS NULL")
+    let count = sqlx::query!("SELECT COUNT(*) FROM users")
         .fetch_one(&state.pg_pool)
         .await
         .unwrap();
@@ -485,7 +561,7 @@ async fn get_users(
 /// Get a user by unique id.
 #[utoipa::path(
     get,
-    path = "/users/{id}",
+    path = "/users/{key}",
     tag = "Users",
     params(
         ("id" = String, Path, description = "Unique user id")
@@ -498,9 +574,17 @@ async fn get_users(
 )]
 async fn get_user_by_id(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(key): Path<String>,
 ) -> Result<Response, AppError> {
-    let user = sqlx::query_as!(Users, "SELECT * FROM sqlx_users WHERE id = $1", id)
+    let user = sqlx::query_as!(
+        Users,
+        r#"
+        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled, 
+        account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at 
+        FROM users WHERE key = $1
+        "#,
+        key
+    )
         .fetch_one(&state.pg_pool)
         .await;
 
@@ -510,7 +594,7 @@ async fn get_user_by_id(
             error!("Error getting user: {}", e);
             Err(AppError::new(
                 ErrorType::NotFound,
-                "User not found for ID: ".to_owned() + &id,
+                "User not found for ID: ".to_owned() + &key,
             ))
         }
     }
@@ -540,8 +624,7 @@ async fn update_user(
     Path(id): Path<String>,
     Json(update_user_request): Json<UpdateUserRequest>,
 ) -> Result<Response, AppError> {
-    let mut query = String::from("UPDATE sqlx_users SET ");
-    // let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
+    let mut query = String::from("UPDATE users SET ");
     let mut params = Vec::new();
     let mut set_clauses = Vec::new();
 
@@ -556,10 +639,7 @@ async fn update_user(
     }
 
     query += &set_clauses.join(", ");
-    query += &format!(
-        " WHERE id = ${} AND deleted_at is null RETURNING *",
-        params.len() + 1
-    );
+    query += &format!(" WHERE id = ${} RETURNING *", params.len() + 1);
     params.push(&id);
 
     info!("Patch Query: {}", query);
@@ -573,7 +653,7 @@ async fn update_user(
         Ok(user) => Ok((
             StatusCode::OK,
             Json(StoredUser {
-                id: user.id,
+                key: user.key,
                 first_name: user.first_name,
                 last_name: user.last_name,
                 email: user.email,
@@ -593,7 +673,7 @@ async fn update_user(
 /// Delete user by unique id. Soft delete user by setting deleted_at timestamp.
 #[utoipa::path(
     delete,
-    path = "/users/{id}",
+    path = "/users/{key}",
     tag = "Users",
     params(
         ("id" = String, Path, description = "Unique user id")
@@ -606,12 +686,12 @@ async fn update_user(
 )]
 async fn delete_user(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(key): Path<String>,
 ) -> Result<Response, AppError> {
     let result = sqlx::query_as!(
         Users,
-        "UPDATE sqlx_users SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL",
-        id
+        "UPDATE users SET account_status = 'DELETED' WHERE key = $1 AND account_status <> 'DELETED'",
+        key
     )
     .fetch_one(&state.pg_pool)
     .await;
@@ -690,7 +770,7 @@ struct UpdateUserRequest {
 #[serde(rename_all = "camelCase")]
 struct StoredUser {
     #[schema(example = "kfERHUaNceaE9i9FrbnNH")]
-    id: String,
+    key: String,
     #[schema(example = "John")]
     first_name: Option<String>,
     #[schema(example = "Doe")]
@@ -722,7 +802,7 @@ struct StoredUsers {
 impl From<Users> for StoredUser {
     fn from(user: Users) -> Self {
         StoredUser {
-            id: user.id,
+            key: user.key,
             first_name: user.first_name,
             last_name: user.last_name,
             email: user.email,
@@ -765,18 +845,38 @@ struct Claims {
 // -- ---------------------
 #[derive(Debug, FromRow)]
 struct Users {
-    id: String,
+    id: i64,
+    key: String,
     first_name: Option<String>,
     last_name: String,
     email: String,
     password_hash: String,
     password_hmac: Vec<u8>,
+    email_verified: Option<bool>,
+    update_password: Option<bool>,
+    two_factor_enabled: Option<bool>,
+    account_status: AccountStatus,
+    last_login: Option<DateTime<Utc>>,
+    failed_login_attempts: Option<i32>,
     #[allow(dead_code)]
     created_at: DateTime<Utc>,
     #[allow(dead_code)]
     updated_at: DateTime<Utc>,
-    #[allow(dead_code)]
-    deleted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Type)]
+#[sqlx(type_name = "account_status", rename_all = "lowercase")]
+enum AccountStatus {
+    #[sqlx(rename = "ACTIVE")]
+    Active,
+    #[sqlx(rename = "INACTIVE")]
+    Inactive,
+    #[sqlx(rename = "PENDING")]
+    Pending,
+    #[sqlx(rename = "LOCKED")]
+    Locked,
+    #[sqlx(rename = "DELTED")]
+    Deleted,
 }
 
 // -- ---------------------

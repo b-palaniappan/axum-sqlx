@@ -241,17 +241,14 @@ async fn authenticate_user(
     Json(user_auth_request): Json<UserAuthRequest>,
 ) -> Result<Response, AppError> {
     // validate user auth request.
-    match user_auth_request.validate() {
-        Ok(_) => (),
-        Err(e) => {
-            return Err(AppError::new(
-                ErrorType::RequestValidationError {
-                    validation_error: e,
-                    object: "UserAuthRequest".to_string(),
-                },
-                "Validation error. Check the request body.",
-            ));
-        }
+    if let Err(e) = user_auth_request.validate() {
+        return Err(AppError::new(
+            ErrorType::RequestValidationError {
+                validation_error: e,
+                object: "UserAuthRequest".to_string(),
+            },
+            "Validation error. Check the request body.",
+        ));
     }
 
     let user = sqlx::query_as!(
@@ -270,61 +267,59 @@ async fn authenticate_user(
     match user {
         Ok(user) => {
             let password_hash = PasswordHash::new(&user.password_hash).unwrap();
-            let password_hmac = &user.password_hmac;
-            let user_id = user.id;
-            // TODO: Only to auth check if the user status is active.
+            // TODO: Only do auth check if the user status is active.
             if argon2
                 .verify_password(user_auth_request.password.as_bytes(), &password_hash)
-                .is_ok()
+                .is_err()
             {
-                let mut mac = match Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()) {
-                    Ok(mac) => mac,
-                    Err(_) => {
-                        user_authentication_failed(State(state), user_id).await;
-                        return Err(AppError::new(
-                            ErrorType::UnauthorizedError,
-                            "Invalid credentials. Check email and password.",
-                        ))
-                    }
-                };
-                mac.update(&user.password_hash.as_bytes());
-                let result = mac.verify_slice(&password_hmac[..]);
-                if result.is_err() {
-                    user_authentication_failed(State(state), user_id).await;
+                let status = user_authentication_failed(State(state), user.id).await;
+                if status == "LOCKED" {
                     return Err(AppError::new(
                         ErrorType::UnauthorizedError,
-                        "Invalid credentials. Check email and password.",
+                        "User account is locked. Contact support.",
                     ));
                 }
-
-                let now = Utc::now();
-                let jti = nanoid!();
-                let user_claim = Claims {
-                    sub: user.key,
-                    iss: JWT_TOKEN_ISSUER.to_string(),
-                    jti,
-                    iat: now.timestamp(),
-                    nbf: now.timestamp(),
-                    exp: now.add(Duration::from_secs(JWT_TOKEN_EXPIRY)).timestamp(),
-                };
-                let token = encode(
-                    &Header::default(),
-                    &user_claim,
-                    &EncodingKey::from_secret(JWT_TOKEN_SECRET.as_ref()),
-                )
-                .unwrap();
-                reset_failed_login_attempts(State(state), user_id).await;
-                // TODO: Store the token in Redis for revoking.
-                // Generate JWT token and return.
-                Ok((StatusCode::OK, Json(UserAuthResponse { token })).into_response())
-            } else {
-                // Invalid credentials.
-                user_authentication_failed(State(state), user_id).await;
-                Err(AppError::new(
+                return Err(AppError::new(
                     ErrorType::UnauthorizedError,
                     "Invalid credentials. Check email and password.",
-                ))
+                ));
             }
+
+            let mut mac = Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()).unwrap();
+            mac.update(&user.password_hash.as_bytes());
+            if mac.verify_slice(&user.password_hmac).is_err() {
+                let status = user_authentication_failed(State(state), user.id).await;
+                if status == "LOCKED" {
+                    return Err(AppError::new(
+                        ErrorType::UnauthorizedError,
+                        "User account is locked. Contact support.",
+                    ));
+                }
+                return Err(AppError::new(
+                    ErrorType::UnauthorizedError,
+                    "Invalid credentials. Check email and password.",
+                ));
+            }
+            let now = Utc::now();
+            let jti = nanoid!();
+            let user_claim = Claims {
+                sub: user.key,
+                iss: JWT_TOKEN_ISSUER.to_string(),
+                jti,
+                iat: now.timestamp(),
+                nbf: now.timestamp(),
+                exp: now.add(Duration::from_secs(JWT_TOKEN_EXPIRY)).timestamp(),
+            };
+            let token = encode(
+                &Header::default(),
+                &user_claim,
+                &EncodingKey::from_secret(JWT_TOKEN_SECRET.as_ref()),
+            )
+            .unwrap();
+            reset_failed_login_attempts(State(state), user.id).await;
+            // TODO: Store the token in Redis for revoking.
+            // Generate JWT token and return.
+            Ok((StatusCode::OK, Json(UserAuthResponse { token })).into_response())
         }
         Err(_) => {
             // User not found.
@@ -341,37 +336,51 @@ async fn authenticate_user(
 }
 
 // Update failed login attempts for user.
-async fn user_authentication_failed(State(state): State<AppState>, user_id: i64) {
-    let result = sqlx::query!(
+async fn user_authentication_failed(State(state): State<AppState>, user_id: i64) -> String {
+    if let Err(e) = sqlx::query!(
         "UPDATE users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = $1",
         user_id
     )
     .execute(&state.pg_pool)
-    .await;
-    match result {
-        Ok(_) => {
-            // If login attempts exceed 5, lock the account.
-            let user = sqlx::query_as!(
-                Users,
-                r#"
-                SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled, 
-                account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at 
-                FROM users WHERE id = $1
-                "#,
-                user_id
-            );
-            let user = user.fetch_one(&state.pg_pool).await.unwrap();
-            if user.failed_login_attempts.unwrap_or(0) >= 5 {
-                let _ = sqlx::query!(
-                    "UPDATE users SET account_status = 'LOCKED' WHERE id = $1",
-                    user_id
-                )
-                .execute(&state.pg_pool)
-                .await;
-            }
-        },
-        Err(e) => error!("Error updating failed login attempts: {:?}", e),
+    .await
+    {
+        error!("Error updating failed login attempts: {:?}", e);
+        return "".to_string();
     }
+
+    let user = match sqlx::query_as!(
+        Users,
+        r#"
+        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled, 
+        account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at
+        FROM users WHERE id = $1
+        "#,
+        user_id
+    )
+    .fetch_one(&state.pg_pool)
+    .await
+    {
+        Ok(user) => user,
+        Err(e) => {
+            error!("Error fetching user: {:?}", e);
+            return "OK".to_string();
+        }
+    };
+
+    // Lock user account if failed login attempts are more than 5.
+    if user.failed_login_attempts.unwrap_or(0) >= 5 {
+        if let Err(e) = sqlx::query!(
+            "UPDATE users SET account_status = 'LOCKED' WHERE id = $1",
+            user_id
+        )
+        .execute(&state.pg_pool)
+        .await
+        {
+            error!("Error locking user account: {:?}", e);
+        }
+        return "LOCKED".to_string()
+    }
+    "OK".to_string()
 }
 
 async fn reset_failed_login_attempts(State(state): State<AppState>, user_id: i64) {
@@ -490,7 +499,7 @@ async fn create_user(
                 ErrorType::InternalServerError,
                 "Error creating user",
             ))
-        },
+        }
     }
 }
 
@@ -864,7 +873,7 @@ struct Users {
     updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Type)]
+#[derive(Debug, PartialEq, Eq, Type)]
 #[sqlx(type_name = "account_status", rename_all = "lowercase")]
 enum AccountStatus {
     #[sqlx(rename = "ACTIVE")]

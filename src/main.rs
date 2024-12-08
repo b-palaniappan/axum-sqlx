@@ -2,6 +2,7 @@ use std::env;
 use std::net::SocketAddr;
 use std::ops::Add;
 use std::string::ToString;
+use std::sync::Arc;
 use std::time::Duration;
 
 use argon2::password_hash::rand_core::OsRng;
@@ -52,7 +53,7 @@ async fn main() {
     let server_addr = server_host + ":" + &*server_port;
 
     // Setup connection pool.
-    let pool = PgPoolOptions::new()
+    let pg_pool = PgPoolOptions::new()
         .max_connections(10)
         .min_connections(1)
         .connect(&database_url)
@@ -68,11 +69,11 @@ async fn main() {
         RedisConnectionManager::new(redis_url).expect("Failed to create Redis connection manager");
     let redis_pool = Pool::builder().min_idle(5).build(manager).await.unwrap();
 
-    let state = AppState {
-        pg_pool: pool,
+    let shared_state = Arc::new(AppState {
+        pg_pool,
         redis_pool,
         hmac_key,
-    };
+    });
 
     // OpenAPI documentation.
     #[derive(OpenApi)]
@@ -124,7 +125,7 @@ async fn main() {
         .route("/auth", post(authenticate_user))
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .fallback(page_not_found)
-        .with_state(state)
+        .with_state(shared_state)
         .layer(CompressionLayer::new())
         .layer(TimeoutLayer::new(Duration::from_secs(5)))
         .layer(cors);
@@ -173,10 +174,10 @@ async fn page_not_found() -> Response {
         (status = 500, description = "Internal server error"),
     )
 )]
-async fn handler_json(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn handler_json(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     // Creating a Redis connection and setting a key value.
     let mut redis_con = state.redis_pool.get().await.unwrap();
-    let _: () = redis_con.set("hello", "world").await.unwrap();
+    let _: () = redis_con.set("hello", "success").await.unwrap();
 
     // Get custom header from Request header.
     let header_value = match headers.get("x-server-version") {
@@ -214,7 +215,7 @@ async fn handler_json(State(state): State<AppState>, headers: HeaderMap) -> Resp
         StatusCode::CREATED,
         Json(Message {
             message: "Hello".to_string(),
-            status: "Success".to_string(),
+            status: redis_con.get("hello").await.unwrap(),
         }),
     )
         .into_response()
@@ -237,7 +238,7 @@ async fn handler_json(State(state): State<AppState>, headers: HeaderMap) -> Resp
     )
 )]
 async fn authenticate_user(
-    State(state): State<AppState>,
+    State(state): State<Arc<AppState>>,
     Json(user_auth_request): Json<UserAuthRequest>,
 ) -> Result<Response, AppError> {
     // validate user auth request.
@@ -336,7 +337,7 @@ async fn authenticate_user(
 }
 
 // Update failed login attempts for user.
-async fn user_authentication_failed(State(state): State<AppState>, user_id: i64) -> String {
+async fn user_authentication_failed(State(state): State<Arc<AppState>>, user_id: i64) -> String {
     if let Err(e) = sqlx::query!(
         "UPDATE users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = $1",
         user_id
@@ -351,7 +352,7 @@ async fn user_authentication_failed(State(state): State<AppState>, user_id: i64)
     let user = match sqlx::query_as!(
         Users,
         r#"
-        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled, 
+        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled,
         account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at
         FROM users WHERE id = $1
         "#,
@@ -378,12 +379,12 @@ async fn user_authentication_failed(State(state): State<AppState>, user_id: i64)
         {
             error!("Error locking user account: {:?}", e);
         }
-        return "LOCKED".to_string()
+        return "LOCKED".to_string();
     }
     "OK".to_string()
 }
 
-async fn reset_failed_login_attempts(State(state): State<AppState>, user_id: i64) {
+async fn reset_failed_login_attempts(State(state): State<Arc<AppState>>, user_id: i64) {
     let result = sqlx::query!(
         "UPDATE users SET failed_login_attempts = 0 WHERE id = $1",
         user_id
@@ -412,7 +413,7 @@ async fn reset_failed_login_attempts(State(state): State<AppState>, user_id: i64
     )
 )]
 async fn handler_create_user(
-    State(state): State<AppState>,
+    State(state): State<Arc<AppState>>,
     Json(user_request): Json<UserRequest>,
 ) -> Response {
     create_user(State(state), user_request)
@@ -421,7 +422,7 @@ async fn handler_create_user(
 }
 
 async fn create_user(
-    State(state): State<AppState>,
+    State(state): State<Arc<AppState>>,
     user_request: UserRequest,
 ) -> Result<Response, AppError> {
     match user_request.validate() {
@@ -520,7 +521,7 @@ async fn create_user(
     )
 )]
 async fn get_users(
-    State(state): State<AppState>,
+    State(state): State<Arc<AppState>>,
     Query(query): Query<PaginationQuery>,
 ) -> Result<Response, AppError> {
     let page = query.page;
@@ -582,7 +583,7 @@ async fn get_users(
     )
 )]
 async fn get_user_by_id(
-    State(state): State<AppState>,
+    State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> Result<Response, AppError> {
     let user = sqlx::query_as!(
@@ -629,7 +630,7 @@ async fn get_user_by_id(
     )
 )]
 async fn update_user(
-    State(state): State<AppState>,
+    State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(update_user_request): Json<UpdateUserRequest>,
 ) -> Result<Response, AppError> {
@@ -694,7 +695,7 @@ async fn update_user(
     )
 )]
 async fn delete_user(
-    State(state): State<AppState>,
+    State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> Result<Response, AppError> {
     let result = sqlx::query_as!(

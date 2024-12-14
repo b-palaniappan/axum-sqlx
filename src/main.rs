@@ -1,10 +1,10 @@
-use std::env;
 use std::net::SocketAddr;
 use std::ops::Add;
 use std::string::ToString;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::config::app_config::{get_server_address, initialize_app_state};
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
 use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier};
@@ -22,17 +22,18 @@ use nanoid::nanoid;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sha2::Sha512;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{Error, FromRow, PgPool, Type};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
 use tracing::{error, info, warn};
-use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
+use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{IntoParams, Modify, OpenApi, ToSchema};
 use utoipa_scalar::{Scalar, Servable};
 use validator::{Validate, ValidationErrors};
+
+mod config;
 
 const JWT_TOKEN_SECRET: &str = "VFGiWL9ua5979rNE7GPWTXDBb5qLkCSHJqd7_S0rhh";
 const JWT_TOKEN_EXPIRY: u64 = 86400;
@@ -44,36 +45,12 @@ async fn main() {
     // Logging handler using tracing.
     tracing_subscriber::fmt().init();
 
+    // Load environment variables from .env file.
     dotenvy::dotenv().ok();
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let server_host = env::var("SERVER_HOST").expect("Error getting server host");
-    let server_port = env::var("SERVER_PORT").expect("Error getting server port");
-    let redis_url = env::var("REDIS_URL").expect("Error getting redis host");
-    let hmac_key = env::var("HMAC_SECRET").expect("Error getting HMAC secret");
-    let server_addr = server_host + ":" + &*server_port;
+    let server_addr = get_server_address().await;
 
-    // Setup connection pool.
-    let pg_pool = PgPoolOptions::new()
-        .max_connections(10)
-        .min_connections(1)
-        .connect(&database_url)
-        .await
-        .map_err(|e| {
-            error!("Failed to create database connection pool: {}", e);
-            panic!("Failed to create database connection pool: {}", e);
-        })
-        .unwrap();
-
-    // Setup Redis connection.
-    let manager =
-        RedisConnectionManager::new(redis_url).expect("Failed to create Redis connection manager");
-    let redis_pool = Pool::builder().min_idle(5).build(manager).await.unwrap();
-
-    let shared_state = Arc::new(AppState {
-        pg_pool,
-        redis_pool,
-        hmac_key,
-    });
+    // Initialize the application state.
+    let shared_state = initialize_app_state().await;
 
     // OpenAPI documentation.
     #[derive(OpenApi)]
@@ -93,13 +70,19 @@ async fn main() {
         fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
             if let Some(components) = openapi.components.as_mut() {
                 components.add_security_scheme(
-                    "api_key",
-                    SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::new("todo_apikey"))),
+                    "api_jwt_token",
+                    SecurityScheme::Http(
+                        HttpBuilder::new()
+                            .scheme(HttpAuthScheme::Bearer)
+                            .bearer_format("JWT")
+                            .build(),
+                    ),
                 )
             }
         }
     }
 
+    // CORS middleware.
     let cors = CorsLayer::new()
         // allow `GET`, `POST` and `PATCH` when accessing the resource
         .allow_methods([
@@ -802,10 +785,15 @@ struct UserAuthResponse {
 #[serde(rename_all = "camelCase")]
 struct StoredUsers {
     users: Vec<StoredUser>,
+    #[schema(example = 1)]
     current_page: i64,
+    #[schema(example = 120)]
     total_items: i64,
+    #[schema(example = 6)]
     total_pages: i64,
+    #[schema(example = 20)]
     items_per_page: i64,
+    #[schema(example = 20)]
     items_in_page: i64,
 }
 
@@ -854,6 +842,7 @@ struct Claims {
 // -- Entities
 // -- ---------------------
 #[derive(Debug, FromRow)]
+#[allow(dead_code)]
 struct Users {
     id: i64,
     key: String,
@@ -868,9 +857,7 @@ struct Users {
     account_status: AccountStatus,
     last_login: Option<DateTime<Utc>>,
     failed_login_attempts: Option<i32>,
-    #[allow(dead_code)]
     created_at: DateTime<Utc>,
-    #[allow(dead_code)]
     updated_at: DateTime<Utc>,
 }
 
@@ -885,7 +872,7 @@ enum AccountStatus {
     Pending,
     #[sqlx(rename = "LOCKED")]
     Locked,
-    #[sqlx(rename = "DELTED")]
+    #[sqlx(rename = "DELETED")]
     Deleted,
 }
 

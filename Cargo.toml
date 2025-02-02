@@ -41,6 +41,8 @@ argon2 = "^0"
 jsonwebtoken = "^9"
 hmac = "^0"
 sha2 = "^0"
+totp-rs = { version = "^5", features = ["qr"] }   # for TOTP 2FA
+webauthn-rs = "^0"  # for passkey based authentication.
 
 # Async
 tokio = { version = "^1.0", features = ["macros", "rt-multi-thread"] }

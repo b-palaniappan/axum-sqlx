@@ -33,7 +33,20 @@ use utoipa::{IntoParams, Modify, OpenApi, ToSchema};
 use utoipa_scalar::{Scalar, Servable};
 use validator::{Validate, ValidationErrors};
 
+mod api {
+    mod handler;
+    mod model;
+}
+mod cache;
 mod config;
+mod db {
+    mod entity;
+    mod repo;
+}
+mod error;
+mod middleware;
+mod service;
+mod util;
 
 const JWT_TOKEN_SECRET: &str = "VFGiWL9ua5979rNE7GPWTXDBb5qLkCSHJqd7_S0rhh";
 const JWT_TOKEN_EXPIRY: u64 = 86400;
@@ -983,7 +996,7 @@ impl IntoResponse for AppError {
                         info!("Validation error on field: {:?}", field_error);
                         validation_sub_errs.push(ValidationError {
                             object: object.to_string(),
-                            field: field.to_owned(),
+                            field: field.to_string(),
                             rejected_value: field_error
                                 .params
                                 .get("value")

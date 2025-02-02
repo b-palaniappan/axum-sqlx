@@ -5,7 +5,14 @@ use sqlx::postgres::PgPoolOptions;
 use std::env;
 use std::sync::Arc;
 
-// Create and load PostgresSQL and Redis connection pools.
+/// Initializes the application state by creating and loading PostgreSQL and Redis connection pools.
+///
+/// # Returns
+/// An `Arc<AppState>` containing the initialized PostgreSQL and Redis connection pools and HMAC key.
+///
+/// # Panics
+/// This function will panic if the `DATABASE_URL`, `REDIS_URL`, or `HMAC_SECRET` environment variables are not set,
+/// or if it fails to create the database connection pool or Redis connection manager.
 pub async fn initialize_app_state() -> Arc<AppState> {
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let redis_url = env::var("REDIS_URL").expect("Error getting redis host");
@@ -34,6 +41,13 @@ pub async fn initialize_app_state() -> Arc<AppState> {
     })
 }
 
+/// Retrieves the server address from the environment variables.
+///
+/// # Returns
+/// A `String` containing the server address in the format `host:port`.
+///
+/// # Panics
+/// This function will panic if the `SERVER_HOST` or `SERVER_PORT` environment variables are not set.
 pub async fn get_server_address() -> String {
     let server_host = env::var("SERVER_HOST").expect("Error getting server host");
     let server_port = env::var("SERVER_PORT").expect("Error getting server port");

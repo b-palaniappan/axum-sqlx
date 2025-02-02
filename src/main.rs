@@ -1,13 +1,13 @@
 use std::net::SocketAddr;
-use std::ops::Add;
 use std::string::ToString;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::api::handler::auth_handler::auth_routes;
 use crate::config::app_config::{get_server_address, initialize_app_state};
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
-use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier};
+use argon2::{Algorithm, Argon2, Params, PasswordHasher};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -17,7 +17,6 @@ use bb8_redis::bb8::Pool;
 use bb8_redis::RedisConnectionManager;
 use derive_more::Display;
 use hmac::{Hmac, Mac};
-use jsonwebtoken::{encode, EncodingKey, Header};
 use nanoid::nanoid;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -34,7 +33,7 @@ use utoipa_scalar::{Scalar, Servable};
 use validator::{Validate, ValidationErrors};
 
 mod api {
-    mod handler;
+    pub(crate) mod handler;
     mod model;
 }
 mod cache;
@@ -73,7 +72,7 @@ async fn main() {
         tags(
             (name = "Users", description = "User management API")
         ),
-        paths(handler_create_user, get_users, get_user_by_id, update_user, handler_json, authenticate_user, delete_user),
+        paths(handler_create_user, get_users, get_user_by_key, update_user, handler_json, delete_user, api::handler::auth_handler::authenticate_handler),
         components(schemas(UserRequest, UpdateUserRequest, StoredUser, StoredUsers, Message, ApiError, ValidationError, UserAuthRequest, UserAuthResponse)),
     )]
     struct ApiDoc;
@@ -113,12 +112,12 @@ async fn main() {
     // build our application with a route
     let app = Router::new()
         .route("/", get(handler_json))
+        .nest("/auth", auth_routes())
         .route("/users", post(handler_create_user).get(get_users))
         .route(
             "/users/{id}",
-            get(get_user_by_id).patch(update_user).delete(delete_user),
+            get(get_user_by_key).patch(update_user).delete(delete_user),
         )
-        .route("/auth", post(authenticate_user))
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .fallback(page_not_found)
         .with_state(shared_state)
@@ -215,121 +214,6 @@ async fn handler_json(State(state): State<Arc<AppState>>, headers: HeaderMap) ->
         }),
     )
         .into_response()
-}
-
-// Authentication handler.
-/// Authenticate user
-///
-/// Authenticate user with email and password.
-#[utoipa::path(
-    post,
-    path = "/auth",
-    tag = "Authentication",
-    request_body = UserAuthRequest,
-    responses(
-        (status = 200, description = "User authenticated successfully", body = UserAuthResponse),
-        (status = 401, description = "Unauthorized error", body = ApiError),
-        (status = 422, description = "Unprocessable request", body = ApiError),
-        (status = 500, description = "Internal server error", body = ApiError),
-    )
-)]
-async fn authenticate_user(
-    State(state): State<Arc<AppState>>,
-    Json(user_auth_request): Json<UserAuthRequest>,
-) -> Result<Response, AppError> {
-    // validate user auth request.
-    if let Err(e) = user_auth_request.validate() {
-        return Err(AppError::new(
-            ErrorType::RequestValidationError {
-                validation_error: e,
-                object: "UserAuthRequest".to_string(),
-            },
-            "Validation error. Check the request body.",
-        ));
-    }
-
-    let user = sqlx::query_as!(
-        Users,
-        r#"
-        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled, 
-        account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at 
-        FROM users WHERE email = $1
-        "#,
-        user_auth_request.email
-    )
-    .fetch_one(&state.pg_pool)
-    .await;
-
-    let argon2 = Argon2::default();
-    match user {
-        Ok(user) => {
-            let password_hash = PasswordHash::new(&user.password_hash).unwrap();
-            // TODO: Only do auth check if the user status is active.
-            if argon2
-                .verify_password(user_auth_request.password.as_bytes(), &password_hash)
-                .is_err()
-            {
-                let status = user_authentication_failed(State(state), user.id).await;
-                if status == "LOCKED" {
-                    return Err(AppError::new(
-                        ErrorType::UnauthorizedError,
-                        "User account is locked. Contact support.",
-                    ));
-                }
-                return Err(AppError::new(
-                    ErrorType::UnauthorizedError,
-                    "Invalid credentials. Check email and password.",
-                ));
-            }
-
-            let mut mac = Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()).unwrap();
-            mac.update(&user.password_hash.as_bytes());
-            if mac.verify_slice(&user.password_hmac).is_err() {
-                let status = user_authentication_failed(State(state), user.id).await;
-                if status == "LOCKED" {
-                    return Err(AppError::new(
-                        ErrorType::UnauthorizedError,
-                        "User account is locked. Contact support.",
-                    ));
-                }
-                return Err(AppError::new(
-                    ErrorType::UnauthorizedError,
-                    "Invalid credentials. Check email and password.",
-                ));
-            }
-            let now = Utc::now();
-            let jti = nanoid!();
-            let user_claim = Claims {
-                sub: user.key,
-                iss: JWT_TOKEN_ISSUER.to_string(),
-                jti,
-                iat: now.timestamp(),
-                nbf: now.timestamp(),
-                exp: now.add(Duration::from_secs(JWT_TOKEN_EXPIRY)).timestamp(),
-            };
-            let token = encode(
-                &Header::default(),
-                &user_claim,
-                &EncodingKey::from_secret(JWT_TOKEN_SECRET.as_ref()),
-            )
-            .unwrap();
-            reset_failed_login_attempts(State(state), user.id).await;
-            // TODO: Store the token in Redis for revoking.
-            // Generate JWT token and return.
-            Ok((StatusCode::OK, Json(UserAuthResponse { token })).into_response())
-        }
-        Err(_) => {
-            // User not found.
-            // Still trigger a fake check to avoid returning immediately.
-            // Which can be used by hacker to figure out user id is not valid.
-            let password_hash = PasswordHash::new(DUMMY_HASHED_PASSWORD).unwrap();
-            let _ = argon2.verify_password("dummy".as_bytes(), &password_hash);
-            Err(AppError::new(
-                ErrorType::UnauthorizedError,
-                "Invalid credentials. Check email and password.",
-            ))
-        }
-    }
 }
 
 // Update failed login attempts for user.
@@ -562,9 +446,9 @@ async fn get_users(
 }
 
 // Get user by user id.
-/// Get a user by ID
+/// Get a user by user key
 ///
-/// Get a user by unique id.
+/// Get a user by unique key.
 #[utoipa::path(
     get,
     path = "/users/{key}",
@@ -578,7 +462,7 @@ async fn get_users(
         (status = 500, description = "Internal server error", body = ApiError),
     )
 )]
-async fn get_user_by_id(
+async fn get_user_by_key(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> Result<Response, AppError> {
@@ -608,12 +492,12 @@ async fn get_user_by_id(
 
 // PATCH update user by user id.
 // Only allowed to update first_name and last_name. Email address is not updatable.
-/// Update user by ID
+/// Update user by user key
 ///
-/// Update user by unique id. Only allowed to update first name and last name.
+/// Update user by unique key. Only allowed to update first name and last name.
 #[utoipa::path(
     patch,
-    path = "/users/{id}",
+    path = "/users/{key}",
     request_body = UpdateUserRequest,
     tag = "Users",
     params(
@@ -627,7 +511,7 @@ async fn get_user_by_id(
 )]
 async fn update_user(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    Path(key): Path<String>,
     Json(update_user_request): Json<UpdateUserRequest>,
 ) -> Result<Response, AppError> {
     let mut query = String::from("UPDATE users SET ");
@@ -645,8 +529,8 @@ async fn update_user(
     }
 
     query += &set_clauses.join(", ");
-    query += &format!(" WHERE id = ${} RETURNING *", params.len() + 1);
-    params.push(&id);
+    query += &format!(" WHERE key = ${} RETURNING *", params.len() + 1);
+    params.push(&key);
 
     info!("Patch Query: {}", query);
     let mut query = sqlx::query_as(&query);
@@ -668,15 +552,15 @@ async fn update_user(
             .into_response()),
         Err(_) => Err(AppError::new(
             ErrorType::NotFound,
-            "User not found for ID: ".to_owned() + &id,
+            "User not found for ID: ".to_owned() + &key,
         )),
     }
 }
 
 // Delete user by user id.
-/// Delete user by ID
+/// Delete user by user key
 ///
-/// Delete user by unique id. Soft delete user by setting deleted_at timestamp.
+/// Delete user by unique key. Soft delete user by setting deleted_at timestamp.
 #[utoipa::path(
     delete,
     path = "/users/{key}",

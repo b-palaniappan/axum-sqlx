@@ -1,7 +1,7 @@
-use crate::AppState;
 use bb8_redis::bb8::Pool;
 use bb8_redis::RedisConnectionManager;
 use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
 use std::env;
 use std::sync::Arc;
 
@@ -52,4 +52,11 @@ pub async fn get_server_address() -> String {
     let server_host = env::var("SERVER_HOST").expect("Error getting server host");
     let server_port = env::var("SERVER_PORT").expect("Error getting server port");
     server_host + ":" + &*server_port
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    pub pg_pool: PgPool,
+    pub redis_pool: Pool<RedisConnectionManager>,
+    pub hmac_key: String,
 }

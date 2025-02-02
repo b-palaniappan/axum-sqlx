@@ -1,6 +1,6 @@
 // Todo: Implement
-// Registration
-// Login
+// Registration (also called create user)
+// Login - Implemented
 // Passkey based login
 // Forgot password
 // Reset password
@@ -11,11 +11,11 @@
 // Phone verification - using SMS
 // May be use auth_token and refresh_token, both will be opaque token of size 32 characters of nano id.
 
+use crate::api::model::user::{UserAuthRequest, UserAuthResponse};
+use crate::error::error_model::{AppError, ErrorType};
 use crate::AccountStatus;
 use crate::{
-    reset_failed_login_attempts, user_authentication_failed, AppError, AppState, Claims, ErrorType,
-    UserAuthRequest, UserAuthResponse, Users, DUMMY_HASHED_PASSWORD, JWT_TOKEN_EXPIRY,
-    JWT_TOKEN_ISSUER, JWT_TOKEN_SECRET,
+    AppState, Users, DUMMY_HASHED_PASSWORD, JWT_TOKEN_EXPIRY, JWT_TOKEN_ISSUER, JWT_TOKEN_SECRET,
 };
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use axum::extract::State;
@@ -25,11 +25,13 @@ use axum::Json;
 use hmac::{Hmac, Mac};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use nanoid::nanoid;
+use serde::{Deserialize, Serialize};
 use sha2::Sha512;
 use sqlx::types::chrono::Utc;
 use std::ops::Add;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::error;
 use validator::Validate;
 
 // Authentication user
@@ -130,4 +132,75 @@ pub async fn authenticate_user(
             ))
         }
     }
+}
+
+// Update failed login attempts for user.
+async fn user_authentication_failed(State(state): State<Arc<AppState>>, user_id: i64) -> String {
+    if let Err(e) = sqlx::query!(
+        "UPDATE users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = $1",
+        user_id
+    )
+    .execute(&state.pg_pool)
+    .await
+    {
+        error!("Error updating failed login attempts: {:?}", e);
+        return "".to_string();
+    }
+
+    let user = match sqlx::query_as!(
+        Users,
+        r#"
+        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled,
+        account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at
+        FROM users WHERE id = $1
+        "#,
+        user_id
+    )
+        .fetch_one(&state.pg_pool)
+        .await
+    {
+        Ok(user) => user,
+        Err(e) => {
+            error!("Error fetching user: {:?}", e);
+            return "OK".to_string();
+        }
+    };
+
+    // Lock user account if failed login attempts are more than 5.
+    if user.failed_login_attempts.unwrap_or(0) >= 5 {
+        if let Err(e) = sqlx::query!(
+            "UPDATE users SET account_status = 'LOCKED' WHERE id = $1",
+            user_id
+        )
+        .execute(&state.pg_pool)
+        .await
+        {
+            error!("Error locking user account: {:?}", e);
+        }
+        return "LOCKED".to_string();
+    }
+    "OK".to_string()
+}
+
+async fn reset_failed_login_attempts(State(state): State<Arc<AppState>>, user_id: i64) {
+    let result = sqlx::query!(
+        "UPDATE users SET failed_login_attempts = 0 WHERE id = $1",
+        user_id
+    )
+    .execute(&state.pg_pool)
+    .await;
+    match result {
+        Ok(_) => (),
+        Err(e) => error!("Error resetting failed login attempts: {:?}", e),
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    sub: String,
+    iss: String,
+    jti: String,
+    iat: i64,
+    nbf: i64,
+    exp: i64,
 }

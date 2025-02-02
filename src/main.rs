@@ -115,7 +115,7 @@ async fn main() {
         .route("/", get(handler_json))
         .route("/users", post(handler_create_user).get(get_users))
         .route(
-            "/users/:id",
+            "/users/{id}",
             get(get_user_by_id).patch(update_user).delete(delete_user),
         )
         .route("/auth", post(authenticate_user))

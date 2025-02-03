@@ -35,11 +35,6 @@ mod middleware;
 mod service;
 mod util;
 
-const JWT_TOKEN_SECRET: &str = "VFGiWL9ua5979rNE7GPWTXDBb5qLkCSHJqd7_S0rhh";
-const JWT_TOKEN_EXPIRY: u64 = 86400;
-const JWT_TOKEN_ISSUER: &str = "http://localhost:3000";
-const DUMMY_HASHED_PASSWORD: &str = "$argon2id$v=19$m=65536,t=4,p=5$UNsE4Dxg3nVM4JeInGjJxw$b6uObfrK8qbCJMQr9VVDuDizRhxCZl4zXwZWbhERMaGjPvcBsHZmcbAwXsUPqtekDwkf4u3qiVKG/maAR+7BdA";
-
 #[tokio::main]
 async fn main() {
     // Logging handler using tracing.

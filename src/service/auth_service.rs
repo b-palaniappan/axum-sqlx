@@ -14,9 +14,7 @@
 use crate::api::model::user::{UserAuthRequest, UserAuthResponse};
 use crate::error::error_model::{AppError, ErrorType};
 use crate::AccountStatus;
-use crate::{
-    AppState, Users, DUMMY_HASHED_PASSWORD, JWT_TOKEN_EXPIRY, JWT_TOKEN_ISSUER, JWT_TOKEN_SECRET,
-};
+use crate::{AppState, Users};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -103,16 +101,18 @@ pub async fn authenticate_user(
             let jti = nanoid!();
             let user_claim = Claims {
                 sub: user.key,
-                iss: JWT_TOKEN_ISSUER.to_string(),
+                iss: state.jwt_issuer.clone(),
                 jti,
                 iat: now.timestamp(),
                 nbf: now.timestamp(),
-                exp: now.add(Duration::from_secs(JWT_TOKEN_EXPIRY)).timestamp(),
+                exp: now
+                    .add(Duration::from_secs(state.jwt_expiration.clone()))
+                    .timestamp(),
             };
             let token = encode(
                 &Header::default(),
                 &user_claim,
-                &EncodingKey::from_secret(JWT_TOKEN_SECRET.as_ref()),
+                &EncodingKey::from_secret(state.jwt_secret.as_ref()),
             )
             .unwrap();
             reset_failed_login_attempts(State(state), user.id).await;
@@ -124,7 +124,7 @@ pub async fn authenticate_user(
             // User not found.
             // Still trigger a fake check to avoid returning immediately.
             // Which can be used by hacker to figure out user id is not valid.
-            let password_hash = PasswordHash::new(DUMMY_HASHED_PASSWORD).unwrap();
+            let password_hash = PasswordHash::new(&*state.dummy_hashed_password).unwrap();
             let _ = argon2.verify_password("dummy".as_bytes(), &password_hash);
             Err(AppError::new(
                 ErrorType::UnauthorizedError,

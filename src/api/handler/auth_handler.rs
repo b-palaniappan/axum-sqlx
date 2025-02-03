@@ -7,6 +7,7 @@ use axum::response::Response;
 use axum::routing::post;
 use axum::{Json, Router};
 use std::sync::Arc;
+use crate::api::model::auth::TokenRequest;
 
 /// Defines the authentication routes for the application.
 ///
@@ -18,6 +19,7 @@ use std::sync::Arc;
 /// A `Router` instance configured with the authentication routes.
 pub fn auth_routes() -> Router<Arc<AppState>> {
     Router::new().route("/", post(authenticate_handler))
+        .route("/validate", post(validate_token_handler))
 }
 
 // Authentication handler.
@@ -42,4 +44,28 @@ async fn authenticate_handler(
 ) -> Result<Response, AppError> {
     // Call service method.
     auth_service::authenticate_user(State(state), Json(user_auth_request)).await
+}
+
+// Validate token handler.
+/// Validate token
+/// 
+/// Validate JWT token using public key.
+#[utoipa::path(
+    post,
+    path = "/auth/validate",
+    tag = "Authentication",
+    request_body = TokenRequest,
+    responses(
+        (status = 200, description = "Token validated successfully"),
+        (status = 401, description = "Unauthorized error", body = ApiError),
+        (status = 422, description = "Unprocessable request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    )
+)]
+async fn validate_token_handler(
+    State(state): State<Arc<AppState>>,
+    Json(token_request): Json<TokenRequest>,
+) -> Result<Response, AppError> {
+    // Call service method.
+    auth_service::validate_token(State(state), Json(token_request)).await
 }

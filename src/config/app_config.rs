@@ -17,7 +17,8 @@ pub async fn initialize_app_state() -> Arc<AppState> {
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let redis_url = env::var("REDIS_URL").expect("Error getting redis host");
     let hmac_key = env::var("HMAC_SECRET").expect("Error getting HMAC secret");
-    let jwt_secret = env::var("JWT_TOKEN_SECRET").expect("Error getting JWT secret");
+    let jwt_private_key = env::var("JWT_PRIVATE_KEY").expect("Error getting JWT private key");
+    let jwt_public_key = env::var("JWT_PUBLIC_KEY").expect("Error getting JWT public key");
     let jwt_expiration = env::var("JWT_TOKEN_EXPIRATION")
         .expect("Error getting JWT expiration")
         .parse::<u64>()
@@ -46,7 +47,8 @@ pub async fn initialize_app_state() -> Arc<AppState> {
         pg_pool,
         redis_pool,
         hmac_key,
-        jwt_secret,
+        jwt_private_key,
+        jwt_public_key,
         jwt_expiration,
         jwt_issuer,
         dummy_hashed_password,
@@ -71,7 +73,8 @@ pub struct AppState {
     pub pg_pool: PgPool,
     pub redis_pool: Pool<RedisConnectionManager>,
     pub hmac_key: String,
-    pub jwt_secret: String,
+    pub jwt_private_key: String,
+    pub jwt_public_key: String,
     pub jwt_expiration: u64,
     pub jwt_issuer: String,
     pub dummy_hashed_password: String,

@@ -21,7 +21,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use hmac::{Hmac, Mac};
-use jsonwebtoken::{encode, EncodingKey, Header};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use nanoid::nanoid;
 use serde::{Deserialize, Serialize};
 use sha2::Sha512;
@@ -31,6 +31,48 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::error;
 use validator::Validate;
+use crate::api::model::auth::TokenRequest;
+
+// Validate JWT token using public key
+pub async fn validate_token(
+    State(state): State<Arc<AppState>>,
+    Json(token_request): Json<TokenRequest>,
+) -> Result<Response, AppError> {
+    if let Err(e) = token_request.validate() {
+        return Err(AppError::new(
+            ErrorType::RequestValidationError {
+                validation_error: e,
+                object: "TokenRequest".to_string(),
+            },
+            "Validation error. Check the token.",
+        ));
+    }
+    let token = token_request.token;
+    let public_key = state.jwt_public_key.clone();
+    let token_data = decode::<Claims>(
+        &token,
+        &DecodingKey::from_rsa_pem(public_key.as_bytes()).unwrap(),
+        &Validation::new(Algorithm::RS256),
+    );
+    match token_data {
+        Ok(token_data) => {
+            if token_data.claims.exp < Utc::now().timestamp() {
+                return Err(AppError::new(
+                    ErrorType::UnauthorizedError,
+                    "Token has expired.",
+                ));
+            }
+            Ok((StatusCode::OK, Json(token_data.claims)).into_response())
+        }
+        Err(e) => {
+            error!("Error decoding token: {:?}", e);
+            Err(AppError::new(
+                ErrorType::UnauthorizedError,
+                "Invalid token. Check the token and try again.",
+            ))
+        }
+    }
+}
 
 // Authentication user
 pub async fn authenticate_user(
@@ -110,11 +152,11 @@ pub async fn authenticate_user(
                     .timestamp(),
             };
             let token = encode(
-                &Header::default(),
+                &Header::new(Algorithm::RS256),
                 &user_claim,
-                &EncodingKey::from_secret(state.jwt_secret.as_ref()),
-            )
-            .unwrap();
+                &EncodingKey::from_rsa_pem(&state.jwt_private_key.as_bytes()).unwrap(),)
+                .unwrap();
+
             reset_failed_login_attempts(State(state), user.id).await;
             // TODO: Store the token in Redis for revoking.
             // Generate JWT token and return.

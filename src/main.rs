@@ -56,7 +56,7 @@ async fn main() {
             (name = "Users", description = "User management API")
         ),
         paths(api::handler::user_handler::create_user_handler, api::handler::user_handler::get_users_handler, api::handler::user_handler::get_user_handler, api::handler::user_handler::update_user_handler, api::handler::user_handler::delete_user_handler, api::handler::welcome_handler::welcome_handler, api::handler::auth_handler::authenticate_handler),
-        components(schemas(api::model::user::UserRequest, api::model::user::UpdateUserRequest, api::model::user::StoredUser, api::model::user::StoredUsers, api::model::user::Message, ApiError, error::error_model::ValidationError, api::model::user::UserAuthRequest, api::model::user::UserAuthResponse)),
+        components(schemas(api::model::user::UserRequest, api::model::user::UpdateUserRequest, api::model::user::StoredUser, api::model::user::StoredUsers, api::model::user::Message, ApiError, error::error_model::ValidationError, api::model::user::UserAuthRequest, api::model::auth::TokenResponse)),
     )]
     struct ApiDoc;
     struct SecurityAddon;

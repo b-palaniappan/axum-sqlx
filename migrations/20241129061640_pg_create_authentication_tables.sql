@@ -33,7 +33,7 @@ CREATE TABLE password_reset_tokens
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     used_at    TIMESTAMP WITH TIME ZONE,
     is_valid   BOOLEAN                  DEFAULT TRUE,
-    CONSTRAINT one_valid_token_per_user UNIQUE (user_id, is_valid)
+    CONSTRAINT one_valid_reset_token_per_user UNIQUE (user_id, is_valid)
 );
 
 -- Index for token lookups

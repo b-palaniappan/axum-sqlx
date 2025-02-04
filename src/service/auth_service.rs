@@ -11,7 +11,8 @@
 // Phone verification - using SMS
 // May be use auth_token and refresh_token, both will be opaque token of size 32 characters of nano id.
 
-use crate::api::model::user::{UserAuthRequest, UserAuthResponse};
+use crate::api::model::auth::{RefreshRequest, TokenRequest, TokenResponse};
+use crate::api::model::user::UserAuthRequest;
 use crate::error::error_model::{AppError, ErrorType};
 use crate::AccountStatus;
 use crate::{AppState, Users};
@@ -31,7 +32,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::error;
 use validator::Validate;
-use crate::api::model::auth::TokenRequest;
 
 // Validate JWT token using public key
 pub async fn validate_token(
@@ -139,12 +139,18 @@ pub async fn authenticate_user(
                     "Invalid credentials. Check email and password.",
                 ));
             }
+            
+            // Generate access token and refresh token.
+            // TODO: Move this to a separate function.
+            // TODO: Persist the refresh_token in PostgreSQL table and deactivate the other active refresh tokens.
+            // TODO: Add the access token to the redis cache by user_key with TTL 3600 seconds.
             let now = Utc::now();
             let jti = nanoid!();
             let user_claim = Claims {
                 sub: user.key,
                 iss: state.jwt_issuer.clone(),
                 jti,
+                aud: "api".to_string(),
                 iat: now.timestamp(),
                 nbf: now.timestamp(),
                 exp: now
@@ -154,13 +160,23 @@ pub async fn authenticate_user(
             let token = encode(
                 &Header::new(Algorithm::RS256),
                 &user_claim,
-                &EncodingKey::from_rsa_pem(&state.jwt_private_key.as_bytes()).unwrap(),)
-                .unwrap();
+                &EncodingKey::from_rsa_pem(&state.jwt_private_key.as_bytes()).unwrap(),
+            )
+            .unwrap();
+
+            let refresh_token = nanoid!(32);
 
             reset_failed_login_attempts(State(state), user.id).await;
-            // TODO: Store the token in Redis for revoking.
-            // Generate JWT token and return.
-            Ok((StatusCode::OK, Json(UserAuthResponse { token })).into_response())
+            Ok((
+                StatusCode::OK,
+                Json(TokenResponse {
+                    access_token: token,
+                    refresh_token,
+                    token_type: "Bearer".to_string(),
+                    expires_in: 3600,
+                }),
+            )
+                .into_response())
         }
         Err(_) => {
             // User not found.
@@ -237,12 +253,51 @@ async fn reset_failed_login_attempts(State(state): State<Arc<AppState>>, user_id
     }
 }
 
+pub async fn refresh_token(
+    State(state): State<Arc<AppState>>,
+    refresh_request: Json<RefreshRequest>,
+) -> Result<Response, AppError> {
+    // Generate a new JWT token and refresh token if the current refresh token is valid.
+    todo!()
+}
+
+pub async fn get_jwks(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
+    // Return the public key for JWT token validation.
+    // TODO: convert the public key to JWK format.
+    Ok((StatusCode::OK, state.jwt_public_key.clone()).into_response())
+}
+
+pub async fn logout_user(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
+    // Invalidate the refresh token.
+    // And remove the access token from redis cache.
+    todo!()
+}
+
+// --------------------------------
+// Structs and Enums
+// --------------------------------
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
     sub: String,
     iss: String,
     jti: String,
+    aud: String,
     iat: i64,
     nbf: i64,
     exp: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct Jwks {
+    keys: Vec<JwkKey>,
+}
+
+#[derive(Debug, Serialize)]
+struct JwkKey {
+    kty: String,  // Key type
+    kid: String,  // Key ID
+    n: String,    // Modulus (for RSA)
+    e: String,    // Exponent (for RSA)
+    alg: String,  // Algorithm
+    use_: String, // Use (sig for signature)
 }

@@ -4,6 +4,8 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::env;
 use std::sync::Arc;
+use std::time::Duration;
+use tracing::info;
 
 /// Initializes the application state by creating and loading PostgreSQL and Redis connection pools.
 ///
@@ -28,6 +30,7 @@ pub async fn initialize_app_state() -> Arc<AppState> {
         env::var("DUMMY_HASHED_PASSWORD").expect("Error getting dummy password");
 
     // Setup connection pool.
+    info!("Initializing database connection pool");
     let pg_pool = PgPoolOptions::new()
         .max_connections(10)
         .min_connections(1)
@@ -37,11 +40,20 @@ pub async fn initialize_app_state() -> Arc<AppState> {
             panic!("Failed to create database connection pool: {}", e);
         })
         .unwrap();
+    info!("✅ Database connection pool initialized");
 
     // Setup Redis connection.
+    info!("Initializing Redis connection pool");
     let manager =
         RedisConnectionManager::new(redis_url).expect("Failed to create Redis connection manager");
-    let redis_pool = Pool::builder().min_idle(5).build(manager).await.unwrap();
+    let redis_pool = Pool::builder()
+        .min_idle(5)
+        .max_lifetime(Duration::from_secs(60 * 60))
+        .idle_timeout(Duration::from_secs(60 * 10))
+        .build(manager)
+        .await
+        .unwrap();
+    info!("✅ Redis connection pool initialized");
 
     Arc::new(AppState {
         pg_pool,

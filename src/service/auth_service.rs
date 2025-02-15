@@ -13,9 +13,9 @@
 
 use crate::api::model::auth::{RefreshRequest, TokenRequest, TokenResponse};
 use crate::api::model::user::UserAuthRequest;
+use crate::db::repo::auth_repository;
 use crate::error::error_model::{AppError, ErrorType};
-use crate::AccountStatus;
-use crate::{AppState, Users};
+use crate::AppState;
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -27,10 +27,11 @@ use nanoid::nanoid;
 use serde::{Deserialize, Serialize};
 use sha2::Sha512;
 use sqlx::types::chrono::Utc;
+use sqlx::PgPool;
 use std::ops::Add;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::error;
+use tracing::{error, info};
 use validator::Validate;
 
 // Validate JWT token using public key
@@ -89,18 +90,8 @@ pub async fn authenticate_user(
             "Validation error. Check the request body.",
         ));
     }
-
-    let user = sqlx::query_as!(
-        Users,
-        r#"
-        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled,
-        account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at
-        FROM users WHERE email = $1
-        "#,
-        user_auth_request.email
-    )
-        .fetch_one(&state.pg_pool)
-        .await;
+    let pg_pool = &state.pg_pool;
+    let user = auth_repository::get_user_by_email(pg_pool, &user_auth_request.email).await;
 
     let argon2 = Argon2::default();
     match user {
@@ -111,39 +102,32 @@ pub async fn authenticate_user(
                 .verify_password(user_auth_request.password.as_bytes(), &password_hash)
                 .is_err()
             {
-                let status = user_authentication_failed(State(state), user.id).await;
-                if status == "LOCKED" {
-                    return Err(AppError::new(
-                        ErrorType::UnauthorizedError,
-                        "User account is locked. Contact support.",
-                    ));
-                }
+                handle_user_authentication_failed(pg_pool, user.id).await.map_err(|e| {
+                    error!("Error handling user authentication failed: {:?}", e);
+                    AppError::new(
+                        ErrorType::InternalServerError,
+                        "Something went wrong. Please try again later.",
+                    )
+                })?;
+            }
+
+            let mut mac = Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()).unwrap();
+            mac.update(&user.password_hash.as_bytes());
+            if mac.verify_slice(&user.password_hmac).is_err() {
+                handle_user_authentication_failed(pg_pool, user.id).await.map_err(|e| {
+                    error!("Error handling user authentication failed: {:?}", e);
+                    AppError::new(
+                        ErrorType::InternalServerError,
+                        "Something went wrong. Please try again later.",
+                    )
+                })?;
                 return Err(AppError::new(
                     ErrorType::UnauthorizedError,
                     "Invalid credentials. Check email and password.",
                 ));
             }
 
-            let mut mac = Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()).unwrap();
-            mac.update(&user.password_hash.as_bytes());
-            if mac.verify_slice(&user.password_hmac).is_err() {
-                let status = user_authentication_failed(State(state), user.id).await;
-                if status == "LOCKED" {
-                    return Err(AppError::new(
-                        ErrorType::UnauthorizedError,
-                        "User account is locked. Contact support.",
-                    ));
-                }
-                return Err(AppError::new(
-                    ErrorType::UnauthorizedError,
-                    "Invalid credentials. Check email and password.",
-                ));
-            }
-            
-            // Generate access token and refresh token.
-            // TODO: Move this to a separate function.
-            // TODO: Persist the refresh_token in PostgreSQL table and deactivate the other active refresh tokens.
-            // TODO: Add the access token to the redis cache by user_key with TTL 3600 seconds.
+            // Generate access token.
             let now = Utc::now();
             let jti = nanoid!();
             let user_claim = Claims {
@@ -164,9 +148,12 @@ pub async fn authenticate_user(
             )
             .unwrap();
 
-            let refresh_token = nanoid!(32);
+            let refresh_token = match generate_persist_refresh_token(&state, user.id).await {
+                Ok(value) => value,
+                Err(value) => return value,
+            };
 
-            reset_failed_login_attempts(State(state), user.id).await;
+            reset_failed_login_attempts(pg_pool, user.id).await;
             Ok((
                 StatusCode::OK,
                 Json(TokenResponse {
@@ -182,7 +169,8 @@ pub async fn authenticate_user(
             // User not found.
             // Still trigger a fake check to avoid returning immediately.
             // Which can be used by hacker to figure out user id is not valid.
-            let password_hash = PasswordHash::new(&*state.dummy_hashed_password).unwrap();
+            let dummy_password_hash = state.dummy_hashed_password.clone();
+            let password_hash = PasswordHash::new(&*dummy_password_hash).unwrap();
             let _ = argon2.verify_password("dummy".as_bytes(), &password_hash);
             Err(AppError::new(
                 ErrorType::UnauthorizedError,
@@ -192,61 +180,87 @@ pub async fn authenticate_user(
     }
 }
 
-// Update failed login attempts for user.
-async fn user_authentication_failed(State(state): State<Arc<AppState>>, user_id: i64) -> String {
-    if let Err(e) = sqlx::query!(
-        "UPDATE users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = $1",
-        user_id
-    )
-    .execute(&state.pg_pool)
-    .await
-    {
-        error!("Error updating failed login attempts: {:?}", e);
-        return "".to_string();
+/// Generates and persists a new refresh token for a user, revoking any existing token.
+///
+/// # Arguments
+///
+/// * `state` - The application state containing the database connection pool.
+/// * `user_id` - The ID of the user for whom the refresh token is being generated.
+///
+/// # Returns
+///
+/// * `Result<String, Result<Response, AppError>>` - Returns the new refresh token if successful, otherwise returns an `AppError`.
+///
+/// # Errors
+///
+/// This function will return an `AppError` if:
+/// * There is an error revoking the existing refresh token.
+/// * There is an error adding the new refresh token to the database.
+async fn generate_persist_refresh_token(
+    state: &Arc<AppState>,
+    user_id: i64,
+) -> Result<String, Result<Response, AppError>> {
+    // Revoke existing token if present
+    if let Some(token) = auth_repository::get_active_refresh_token(&state.pg_pool, user_id).await {
+        auth_repository::revoke_refresh_token(&state.pg_pool, token)
+            .await
+            .map_err(|e| {
+                error!("Error deactivating refresh token: {:?}", e);
+                Err(AppError::new(
+                    ErrorType::InternalServerError,
+                    "Failed to generate refresh token.",
+                ))
+            })?;
     }
 
-    let user = match sqlx::query_as!(
-        Users,
-        r#"
-        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled,
-        account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at
-        FROM users WHERE id = $1
-        "#,
-        user_id
+    // Generate and persist new token
+    let refresh_token = nanoid!(32);
+    let refresh_token_expiry = Utc::now() + Duration::from_secs(60 * 60 * 24 * 10);
+
+    auth_repository::add_refresh_token(
+        &state.pg_pool,
+        user_id,
+        &refresh_token,
+        refresh_token_expiry,
     )
-        .fetch_one(&state.pg_pool)
+    .await
+    .map_err(|e| {
+        error!("Error adding refresh token: {:?}", e);
+        Err(AppError::new(
+            ErrorType::InternalServerError,
+            "Failed to generate refresh token.",
+        ))
+    })?;
+
+    Ok(refresh_token)
+}
+
+// Update failed login attempts for user.
+async fn handle_user_authentication_failed(pg_pool: &PgPool, user_id: i64) -> Result<(), AppError> {
+    auth_repository::increase_failed_login_attempts(pg_pool, user_id)
         .await
-    {
-        Ok(user) => user,
-        Err(e) => {
-            error!("Error fetching user: {:?}", e);
-            return "OK".to_string();
-        }
-    };
+        .unwrap();
+
+    let user = auth_repository::get_user_by_id(pg_pool, user_id)
+        .await
+        .unwrap();
 
     // Lock user account if failed login attempts are more than 5.
     if user.failed_login_attempts.unwrap_or(0) >= 5 {
-        if let Err(e) = sqlx::query!(
-            "UPDATE users SET account_status = 'LOCKED' WHERE id = $1",
-            user_id
-        )
-        .execute(&state.pg_pool)
-        .await
-        {
-            error!("Error locking user account: {:?}", e);
-        }
-        return "LOCKED".to_string();
+        auth_repository::lock_user_account(pg_pool, user_id)
+            .await
+            .unwrap();
+        return Err(AppError::new(
+            ErrorType::UnauthorizedError,
+            "User account is locked. Contact support.",
+        ));
     }
-    "OK".to_string()
+    Ok(())
 }
 
-async fn reset_failed_login_attempts(State(state): State<Arc<AppState>>, user_id: i64) {
-    let result = sqlx::query!(
-        "UPDATE users SET failed_login_attempts = 0 WHERE id = $1",
-        user_id
-    )
-    .execute(&state.pg_pool)
-    .await;
+async fn reset_failed_login_attempts(pg_pool: &PgPool, user_id: i64) {
+    let result = auth_repository::reset_failed_login_attempts(pg_pool, user_id)
+        .await;
     match result {
         Ok(_) => (),
         Err(e) => error!("Error resetting failed login attempts: {:?}", e),

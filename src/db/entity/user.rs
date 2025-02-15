@@ -24,14 +24,19 @@ pub struct Users {
 #[derive(Debug, PartialEq, Eq, Type)]
 #[sqlx(type_name = "account_status", rename_all = "lowercase")]
 pub enum AccountStatus {
+    // ACTIVE - User account is active and can be used
     #[sqlx(rename = "ACTIVE")]
     Active,
+    // INACTIVE - User account is inactive and cannot be used. This status is set when the user is banned or the account is disabled.
     #[sqlx(rename = "INACTIVE")]
     Inactive,
+    // PENDING - User account is pending activation and cannot be used. This status is set when the user registers but has not yet validated their email.
     #[sqlx(rename = "PENDING")]
     Pending,
+    // LOCKED - User account is locked and cannot be used. This status is set when the user has too many failed login attempts.
     #[sqlx(rename = "LOCKED")]
     Locked,
+    // DELETED - User account is deleted and cannot be used. This status is set when the user deletes their account.
     #[sqlx(rename = "DELETED")]
     Deleted,
 }

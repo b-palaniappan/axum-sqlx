@@ -10,6 +10,7 @@ CREATE TABLE refresh_tokens
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     used_at    TIMESTAMP WITH TIME ZONE,
-    is_valid   BOOLEAN                           DEFAULT TRUE,
-    CONSTRAINT one_valid_token_per_user UNIQUE (user_id, is_valid)
+    is_valid   BOOLEAN                           DEFAULT TRUE
 );
+
+CREATE UNIQUE INDEX one_active_token_per_user ON refresh_tokens (user_id) WHERE is_valid = true;

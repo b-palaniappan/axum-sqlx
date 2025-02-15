@@ -1,5 +1,6 @@
 use crate::db::entity::user::Users;
 use crate::AccountStatus;
+use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 /// Retrieves a user by their email address from the database.
@@ -31,31 +32,6 @@ pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Users, sqlx
         .await?
         .ok_or(sqlx::Error::RowNotFound)?;
     Ok(user)
-}
-
-/// Updates the failed login attempts count for a user in the database.
-///
-/// # Arguments
-///
-/// * `pool` - A reference to the PostgreSQL connection pool.
-/// * `user_id` - The ID of the user whose failed login attempts count needs to be updated.
-///
-/// # Returns
-///
-/// * `Result<(), sqlx::Error>` - On success, returns an empty `Ok(())`.
-///   On failure, returns a `sqlx::Error`.
-///
-/// # Errors
-///
-/// This function will return an error if the query fails.
-pub async fn update_failed_login_attempts(pool: &PgPool, user_id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        "UPDATE users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = $1",
-        user_id
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
 }
 
 /// Retrieves a user by their ID from the database.
@@ -164,6 +140,16 @@ pub async fn deactivate_refresh_token(pool: &PgPool, user_id: i64) -> Result<(),
     Ok(())
 }
 
+pub async fn revoke_refresh_token(pool: &PgPool, token: String) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "UPDATE refresh_tokens SET is_valid = false, status = 'REVOKED' WHERE token = $1",
+        token
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Adds a new refresh token for a user in the database.
 ///
 /// # Arguments
@@ -180,15 +166,46 @@ pub async fn deactivate_refresh_token(pool: &PgPool, user_id: i64) -> Result<(),
 /// # Errors
 ///
 /// This function will return an error if the query fails.
-pub async fn add_refresh_token(pool: &PgPool, user_id: i64, token: &str) -> Result<(), sqlx::Error> {
+pub async fn add_refresh_token(
+    pool: &PgPool,
+    user_id: i64,
+    token: &str,
+    expires_at: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
     sqlx::query!(
-        "INSERT INTO refresh_tokens (user_id, token) VALUES ($1, $2)",
+        "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
         user_id,
-        token
+        token,
+        expires_at
     )
     .execute(pool)
     .await?;
     Ok(())
+}
+
+pub async fn increase_failed_login_attempts(
+    pool: &PgPool,
+    user_id: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "UPDATE users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = $1",
+        user_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_active_refresh_token(pool: &PgPool, user_id: i64) -> Option<String> {
+    let token = sqlx::query!(
+        "SELECT token FROM refresh_tokens WHERE user_id = $1 AND is_valid = true AND status = 'ACTIVE'",
+        user_id
+    )
+        .fetch_optional(pool)
+        .await
+        .ok()?
+        .map(|row| row.token);
+    token
 }
 
 pub async fn logout_user(pool: &PgPool, user_id: i64) -> Result<(), sqlx::Error> {

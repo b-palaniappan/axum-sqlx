@@ -28,7 +28,7 @@ mod cache;
 mod config;
 mod db {
     pub(crate) mod entity;
-    mod repo;
+    pub(crate) mod repo;
 }
 mod error;
 mod middleware;

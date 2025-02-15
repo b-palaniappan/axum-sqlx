@@ -6,6 +6,7 @@ use validator::ValidationErrors;
 // New error data type.
 // #[derive(ToSchema)]
 // TODO: Getting error for ToSchema for ValidationErrors from validator.
+#[derive(Debug)]
 pub struct AppError {
     pub error_type: ErrorType,
     pub error_message: String,

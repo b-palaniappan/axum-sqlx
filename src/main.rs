@@ -3,10 +3,11 @@ use std::string::ToString;
 use std::time::Duration;
 
 use crate::api::handler::auth_handler::auth_routes;
+use crate::api::handler::cache_handler::cache_routes;
 use crate::api::handler::user_handler::user_routes;
 use crate::api::handler::welcome_handler::welcome_routes;
 use crate::config::app_config::{get_server_address, initialize_app_state, AppState};
-use crate::db::entity::user::{AccountStatus, Users};
+use crate::db::entity::user::AccountStatus;
 use crate::error::error_model::ApiError;
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -97,6 +98,7 @@ async fn main() {
         .nest("/welcome", welcome_routes())
         .nest("/auth", auth_routes())
         .nest("/users", user_routes())
+        .nest("/cache", cache_routes())
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .fallback(page_not_found)
         .method_not_allowed_fallback(method_not_allowed)

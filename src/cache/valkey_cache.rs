@@ -1,5 +1,4 @@
 use crate::config::app_config::AppState;
-use crate::error::error_model::{AppError, ErrorType};
 use axum::extract::State;
 use redis::AsyncCommands;
 use serde::Serialize;

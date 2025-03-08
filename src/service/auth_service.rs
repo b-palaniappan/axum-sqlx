@@ -1,9 +1,10 @@
 // Todo: Implement
-// Registration (also called create user)
-// Login - Implemented
+// Registration (also called create user) - Implemented
+// Login - Implemented with JWT and Refresh token.
 // Passkey based login
-// Forgot password
-// Reset password
+// Forgot password - Work in progress
+// Reset password - Work in progress
+// Logout - Work in progress
 // TOTP
 // TOTP QR Code.
 // JWT or Auth Token based logged in.
@@ -13,6 +14,7 @@
 
 use crate::api::model::auth::{RefreshRequest, TokenRequest, TokenResponse};
 use crate::api::model::user::UserAuthRequest;
+use crate::cache::valkey_cache;
 use crate::db::repo::auth_repository;
 use crate::error::error_model::{AppError, ErrorType};
 use crate::AppState;
@@ -21,18 +23,26 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::prelude::BASE64_URL_SAFE;
+use base64::Engine;
 use hmac::{Hmac, Mac};
+use jsonwebtoken::jwk::{Jwk, JwkSet, KeyAlgorithm, KeyOperations, PublicKeyUse};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use nanoid::nanoid;
+use openssl::pkey::PKey;
+use openssl::rsa::Rsa;
 use serde::{Deserialize, Serialize};
 use sha2::Sha512;
 use sqlx::types::chrono::Utc;
 use sqlx::PgPool;
 use std::ops::Add;
+use std::string::ToString;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::error;
 use validator::Validate;
+use xxhash_rust::xxh3::xxh3_64;
 
 // Validate JWT token using public key
 pub async fn validate_token(
@@ -102,25 +112,29 @@ pub async fn authenticate_user(
                 .verify_password(user_auth_request.password.as_bytes(), &password_hash)
                 .is_err()
             {
-                handle_user_authentication_failed(pg_pool, user.id).await.map_err(|e| {
-                    error!("Error handling user authentication failed: {:?}", e);
-                    AppError::new(
-                        ErrorType::InternalServerError,
-                        "Something went wrong. Please try again later.",
-                    )
-                })?;
+                handle_user_authentication_failed(pg_pool, user.id)
+                    .await
+                    .map_err(|e| {
+                        error!("Error handling user authentication failed: {:?}", e);
+                        AppError::new(
+                            ErrorType::InternalServerError,
+                            "Something went wrong. Please try again later.",
+                        )
+                    })?;
             }
 
             let mut mac = Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()).unwrap();
             mac.update(&user.password_hash.as_bytes());
             if mac.verify_slice(&user.password_hmac).is_err() {
-                handle_user_authentication_failed(pg_pool, user.id).await.map_err(|e| {
-                    error!("Error handling user authentication failed: {:?}", e);
-                    AppError::new(
-                        ErrorType::InternalServerError,
-                        "Something went wrong. Please try again later.",
-                    )
-                })?;
+                handle_user_authentication_failed(pg_pool, user.id)
+                    .await
+                    .map_err(|e| {
+                        error!("Error handling user authentication failed: {:?}", e);
+                        AppError::new(
+                            ErrorType::InternalServerError,
+                            "Something went wrong. Please try again later.",
+                        )
+                    })?;
                 return Err(AppError::new(
                     ErrorType::UnauthorizedError,
                     "Invalid credentials. Check email and password.",
@@ -129,7 +143,10 @@ pub async fn authenticate_user(
 
             // Generate access token.
             let now = Utc::now();
-            let jti = nanoid!();
+            let jti = nanoid!(); // Unique jwt identifier.
+            let user_key_clone = user.key.clone();
+            let jti_clone = jti.clone();
+
             let user_claim = Claims {
                 sub: user.key,
                 iss: state.jwt_issuer.clone(),
@@ -141,8 +158,10 @@ pub async fn authenticate_user(
                     .add(Duration::from_secs(state.jwt_expiration.clone()))
                     .timestamp(),
             };
+            let mut header = Header::new(Algorithm::RS256);
+            header.kid = Some(get_public_key_id(State(state.clone())));
             let token = encode(
-                &Header::new(Algorithm::RS256),
+                &header,
                 &user_claim,
                 &EncodingKey::from_rsa_pem(&state.jwt_private_key.as_bytes()).unwrap(),
             )
@@ -154,6 +173,7 @@ pub async fn authenticate_user(
             };
 
             reset_failed_login_attempts(pg_pool, user.id).await;
+            cache_token_id(&state, &user_key_clone, &jti_clone).await?;
             Ok((
                 StatusCode::OK,
                 Json(TokenResponse {
@@ -178,6 +198,55 @@ pub async fn authenticate_user(
             ))
         }
     }
+}
+
+async fn cache_token_id(
+    state: &Arc<AppState>,
+    user_key: &String,
+    jti_clone: &String,
+) -> Result<(), AppError> {
+    // Step 1. Check if there is an active JTI for the user. If yes, delete it.
+    let cached_user_key: Option<JwtId> = valkey_cache::get_object(State(state.clone()), user_key)
+        .await
+        .map_err(|e| {
+            error!("Error getting JTI from cache: {:?}", e);
+            AppError::new(
+                ErrorType::InternalServerError,
+                "Something went wrong. Please try again later.",
+            )
+        })?;
+    if let Some(cached_user_key) = cached_user_key {
+        if !cached_user_key.value.is_empty() {
+            valkey_cache::delete_object(State(state.clone()), &user_key)
+                .await
+                .map_err(|e| {
+                    error!("Error deleting JTI from cache: {:?}", e);
+                    AppError::new(
+                        ErrorType::InternalServerError,
+                        "Something went wrong. Please try again later.",
+                    )
+                })?;
+        }
+    }
+
+    // Step 2. Store the JTI in cache with TTL.
+    valkey_cache::set_object_with_ttl(
+        State(state.clone()),
+        &user_key,
+        &JwtId {
+            value: jti_clone.clone(),
+        },
+        Duration::from_secs(state.jwt_expiration.clone()).as_secs(),
+    )
+    .await
+    .map_err(|e| {
+        error!("Error storing JTI to cache: {:?}", e);
+        AppError::new(
+            ErrorType::InternalServerError,
+            "Something went wrong. Please try again later.",
+        )
+    })?;
+    Ok(())
 }
 
 /// Generates and persists a new refresh token for a user, revoking any existing token.
@@ -259,8 +328,7 @@ async fn handle_user_authentication_failed(pg_pool: &PgPool, user_id: i64) -> Re
 }
 
 async fn reset_failed_login_attempts(pg_pool: &PgPool, user_id: i64) {
-    let result = auth_repository::reset_failed_login_attempts(pg_pool, user_id)
-        .await;
+    let result = auth_repository::reset_failed_login_attempts(pg_pool, user_id).await;
     match result {
         Ok(_) => (),
         Err(e) => error!("Error resetting failed login attempts: {:?}", e),
@@ -275,10 +343,64 @@ pub async fn refresh_token(
     todo!()
 }
 
+/// Returns the JSON Web Key Set (JWKS) containing the public key for JWT token validation.
+///
+/// This function converts the stored public key from PEM format to RSA format,
+/// then encodes it to Base64 URL-safe format and constructs a JWK object.
+/// The JWK object is then wrapped in a JWKS and returned as a JSON response.
+///
+/// # Arguments
+///
+/// * `state` - The application state containing the public key.
+///
+/// # Returns
+///
+/// * `Result<Response, AppError>` - Returns a JSON response containing the JWKS if successful, otherwise returns an `AppError`.
+///
+/// # Errors
+///
+/// This function will return an `AppError` if:
+/// * There is an error converting the public key from PEM to RSA format.
+/// * There is an error converting the RSA key to a PKey.
 pub async fn get_jwks(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
     // Return the public key for JWT token validation.
-    // TODO: convert the public key to JWK format.
-    Ok((StatusCode::OK, state.jwt_public_key.clone()).into_response())
+    let rsa = Rsa::public_key_from_pem(&state.jwt_public_key.as_bytes()).map_err(|e| {
+        error!("Error converting public key to RSA: {:?}", e);
+        AppError::new(
+            ErrorType::InternalServerError,
+            "Something went wrong. Please try again later.",
+        )
+    })?;
+    let public_key = PKey::from_rsa(rsa).map_err(|e| {
+        error!("Error converting RSA to PKey: {:?}", e);
+        AppError::new(
+            ErrorType::InternalServerError,
+            "Something went wrong. Please try again later.",
+        )
+    })?;
+
+    let n = BASE64_URL_SAFE.encode(&public_key.rsa().unwrap().n().to_vec());
+    let e = BASE64_URL_SAFE.encode(&public_key.rsa().unwrap().e().to_vec());
+
+    let jwk = Jwk {
+        common: jsonwebtoken::jwk::CommonParameters {
+            public_key_use: Some(PublicKeyUse::Signature),
+            key_operations: Some(vec![KeyOperations::Verify, KeyOperations::Sign]),
+            key_algorithm: Some(KeyAlgorithm::RS256),
+            key_id: Some(get_public_key_id(State(state))),
+            ..Default::default()
+        },
+        algorithm: jsonwebtoken::jwk::AlgorithmParameters::RSA(
+            jsonwebtoken::jwk::RSAKeyParameters {
+                n,
+                e,
+                ..Default::default()
+            },
+        ),
+    };
+
+    let jwks = JwkSet { keys: vec![jwk] };
+    Ok((StatusCode::OK, Json(jwks)).into_response())
 }
 
 pub async fn logout_user(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
@@ -287,9 +409,41 @@ pub async fn logout_user(State(state): State<Arc<AppState>>) -> Result<Response,
     todo!()
 }
 
+/// Generates a unique identifier for the public key.
+///
+/// This function computes a hash of the public key using the xxHash3 algorithm,
+/// converts the hash to a byte array, and then encodes it to a URL-safe Base64 string.
+///
+/// # Arguments
+///
+/// * `state` - The application state containing the public key.
+///
+/// # Returns
+///
+/// * `String` - A URL-safe Base64 encoded string representing the unique identifier of the public key.
+fn get_public_key_id(State(state): State<Arc<AppState>>) -> String {
+    let hash = xxh3_64(state.jwt_public_key.as_bytes());
+    let bytes = hash.to_be_bytes();
+    URL_SAFE_NO_PAD.encode(&bytes)
+}
+
 // --------------------------------
 // Structs and Enums
 // --------------------------------
+/// Represents the claims contained in a JSON Web Token (JWT).
+///
+/// This struct is used to store the standard claims of a JWT, which are used for
+/// authentication and authorization purposes.
+///
+/// # Fields
+///
+/// * `sub` - The subject of the token, typically the user ID.
+/// * `iss` - The issuer of the token.
+/// * `jti` - The unique identifier for the token.
+/// * `aud` - The audience for the token, typically the intended recipient.
+/// * `iat` - The issued at time, in seconds since the epoch.
+/// * `nbf` - The not before time, in seconds since the epoch.
+/// * `exp` - The expiration time, in seconds since the epoch.
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
     sub: String,
@@ -301,17 +455,15 @@ struct Claims {
     exp: i64,
 }
 
-#[derive(Debug, Serialize)]
-struct Jwks {
-    keys: Vec<JwkKey>,
-}
-
-#[derive(Debug, Serialize)]
-struct JwkKey {
-    kty: String,  // Key type
-    kid: String,  // Key ID
-    n: String,    // Modulus (for RSA)
-    e: String,    // Exponent (for RSA)
-    alg: String,  // Algorithm
-    use_: String, // Use (sig for signature)
+/// Represents a JSON Web Token (JWT) identifier.
+///
+/// This struct is used to store the unique identifier (JTI) of a JWT token,
+/// which can be used for various purposes such as token revocation and validation.
+///
+/// # Fields
+///
+/// * `value` - A string containing the unique identifier of the JWT token.
+#[derive(Debug, Serialize, Deserialize)]
+struct JwtId {
+    value: String,
 }

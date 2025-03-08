@@ -45,7 +45,27 @@ use tracing::error;
 use validator::Validate;
 use xxhash_rust::xxh3::xxh3_64;
 
-// Validate JWT token using public key
+/// Validates a JWT token using the public key.
+///
+/// This function validates the provided JWT token by decoding it using the public key.
+/// If the token is valid and not expired, it returns the claims contained in the token.
+/// If the token is invalid or expired, it returns an `AppError`.
+///
+/// # Arguments
+///
+/// * `state` - The application state containing the public key.
+/// * `token_request` - The request containing the JWT token to be validated.
+///
+/// # Returns
+///
+/// * `Result<Response, AppError>` - Returns a JSON response containing the token claims if successful, otherwise returns an `AppError`.
+///
+/// # Errors
+///
+/// This function will return an `AppError` if:
+/// * The token request is invalid.
+/// * The token has expired.
+/// * There is an error decoding the token.
 pub async fn validate_token(
     State(state): State<Arc<AppState>>,
     Json(token_request): Json<TokenRequest>,
@@ -61,20 +81,44 @@ pub async fn validate_token(
     }
     let token = token_request.token;
     let public_key = state.jwt_public_key.clone();
+    let mut validation = Validation::new(Algorithm::RS256);
+    validation.set_audience(&["api"]);
     let token_data = decode::<Claims>(
         &token,
         &DecodingKey::from_rsa_pem(public_key.as_bytes()).unwrap(),
-        &Validation::new(Algorithm::RS256),
+        &validation,
     );
     match token_data {
         Ok(token_data) => {
+            // Check token expiration
             if token_data.claims.exp < Utc::now().timestamp() {
                 return Err(AppError::new(
                     ErrorType::UnauthorizedError,
                     "Token has expired.",
                 ));
             }
-            Ok((StatusCode::OK, Json(token_data.claims)).into_response())
+
+            // Verify token exists in cache
+            let cached_jwt: Option<JwtId> =
+                valkey_cache::get_object(State(state.clone()), &token_data.claims.sub)
+                    .await
+                    .map_err(|e| {
+                        error!("Error getting JWT from cache: {:?}", e);
+                        AppError::new(
+                            ErrorType::InternalServerError,
+                            "Something went wrong. Please try again later.",
+                        )
+                    })?;
+
+            match cached_jwt {
+                Some(jwt) if jwt.value == token_data.claims.jti => {
+                    Ok((StatusCode::OK, Json(token_data.claims)).into_response())
+                }
+                _ => Err(AppError::new(
+                    ErrorType::UnauthorizedError,
+                    "Token is not valid or has been revoked.",
+                )),
+            }
         }
         Err(e) => {
             error!("Error decoding token: {:?}", e);
@@ -86,7 +130,29 @@ pub async fn validate_token(
     }
 }
 
-// Authentication user
+/// Authenticates a user based on the provided credentials.
+///
+/// This function validates the user authentication request, checks the user's credentials,
+/// and generates an access token and a refresh token if the credentials are valid.
+/// If the credentials are invalid, it handles the failed authentication attempt.
+///
+/// # Arguments
+///
+/// * `state` - The application state containing the database connection pool, HMAC key, and JWT settings.
+/// * `user_auth_request` - The user authentication request containing the email and password.
+///
+/// # Returns
+///
+/// * `Result<Response, AppError>` - Returns a JSON response containing the access token and refresh token if successful, otherwise returns an `AppError`.
+///
+/// # Errors
+///
+/// This function will return an `AppError` if:
+/// * The user authentication request is invalid.
+/// * The user is not found.
+/// * The password verification fails.
+/// * There is an error generating the access token or refresh token.
+/// * There is an error handling the failed authentication attempt.
 pub async fn authenticate_user(
     State(state): State<Arc<AppState>>,
     Json(user_auth_request): Json<UserAuthRequest>,
@@ -378,15 +444,16 @@ pub async fn refresh_token(
     let pg_pool = &state.pg_pool;
 
     // Check if refresh token exists and is valid
-    let token_info = match auth_repository::get_refresh_token_by_value(pg_pool, &refresh_token).await {
-        Ok(token_info) => token_info,
-        Err(_) => {
-            return Err(AppError::new(
-                ErrorType::UnauthorizedError,
-                "Invalid refresh token.",
-            ));
-        }
-    };
+    let token_info =
+        match auth_repository::get_refresh_token_by_value(pg_pool, &refresh_token).await {
+            Ok(token_info) => token_info,
+            Err(_) => {
+                return Err(AppError::new(
+                    ErrorType::UnauthorizedError,
+                    "Invalid refresh token.",
+                ));
+            }
+        };
 
     let (user_id, is_valid, status) = token_info;
 
@@ -437,10 +504,10 @@ pub async fn refresh_token(
             .add(Duration::from_secs(state.jwt_expiration.clone()))
             .timestamp(),
     };
-    
+
     let mut header = Header::new(Algorithm::RS256);
     header.kid = Some(get_public_key_id(State(state.clone())));
-    
+
     let token = encode(
         &header,
         &user_claim,
@@ -533,12 +600,12 @@ pub async fn get_jwks(State(state): State<Arc<AppState>>) -> Result<Response, Ap
 pub async fn logout_user(State(_state): State<Arc<AppState>>) -> Result<Response, AppError> {
     // In a real implementation, you would get the user_id from the authenticated user context
     // For now, this is a placeholder for future implementation.
-    
+
     // Implementation steps:
     // 1. Get user_id from the authenticated user context
     // 2. Revoke all refresh tokens for the user
     // 3. Remove the user's JWT token from Redis/Valkey cache
-    
+
     // This is just a stub implementation that returns success
     // It will need to be expanded when authentication middleware is fully implemented
     Ok((StatusCode::OK, "Logout successful").into_response())

@@ -237,7 +237,10 @@ pub async fn logout_user(pool: &PgPool, user_id: i64) -> Result<(), sqlx::Error>
 /// # Errors
 ///
 /// This function will return an error if the query fails or if no token is found with the given value.
-pub async fn get_refresh_token_by_value(pool: &PgPool, token: &str) -> Result<(i64, bool, RefreshTokenStatus), sqlx::Error> {
+pub async fn get_refresh_token_by_value(
+    pool: &PgPool,
+    token: &str,
+) -> Result<(i64, bool, RefreshTokenStatus), sqlx::Error> {
     let result = sqlx::query!(
         r#"SELECT user_id, is_valid, status as "status: RefreshTokenStatus" FROM refresh_tokens WHERE token = $1"#,
         token
@@ -245,9 +248,9 @@ pub async fn get_refresh_token_by_value(pool: &PgPool, token: &str) -> Result<(i
     .fetch_optional(pool)
     .await?
     .ok_or(sqlx::Error::RowNotFound)?;
-    
+
     let user_id = result.user_id.ok_or_else(|| sqlx::Error::RowNotFound)?;
     let is_valid = result.is_valid.unwrap_or(false);
-    
+
     Ok((user_id, is_valid, result.status))
 }

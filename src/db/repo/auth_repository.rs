@@ -1,3 +1,4 @@
+use crate::db::entity::auth::RefreshTokenStatus;
 use crate::db::entity::user::Users;
 use crate::AccountStatus;
 use sqlx::types::chrono::{DateTime, Utc};
@@ -216,4 +217,37 @@ pub async fn logout_user(pool: &PgPool, user_id: i64) -> Result<(), sqlx::Error>
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Retrieves a refresh token by its token value from the database.
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool.
+/// * `token` - The refresh token string to look up.
+///
+/// # Returns
+///
+/// * `Result<(i64, bool, RefreshTokenStatus), sqlx::Error>` - On success, returns a tuple containing:
+///   - user_id: The ID of the user who owns the token
+///   - is_valid: Whether the token is valid
+///   - status: The current status of the token (ACTIVE, INACTIVE, REVOKED, EXPIRED)
+///   On failure, returns a `sqlx::Error`.
+///
+/// # Errors
+///
+/// This function will return an error if the query fails or if no token is found with the given value.
+pub async fn get_refresh_token_by_value(pool: &PgPool, token: &str) -> Result<(i64, bool, RefreshTokenStatus), sqlx::Error> {
+    let result = sqlx::query!(
+        r#"SELECT user_id, is_valid, status as "status: RefreshTokenStatus" FROM refresh_tokens WHERE token = $1"#,
+        token
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or(sqlx::Error::RowNotFound)?;
+    
+    let user_id = result.user_id.ok_or_else(|| sqlx::Error::RowNotFound)?;
+    let is_valid = result.is_valid.unwrap_or(false);
+    
+    Ok((user_id, is_valid, result.status))
 }

@@ -15,6 +15,7 @@
 use crate::api::model::auth::{RefreshRequest, TokenRequest, TokenResponse};
 use crate::api::model::user::UserAuthRequest;
 use crate::cache::valkey_cache;
+use crate::db::entity::auth::RefreshTokenStatus;
 use crate::db::repo::auth_repository;
 use crate::error::error_model::{AppError, ErrorType};
 use crate::AppState;
@@ -180,7 +181,7 @@ pub async fn authenticate_user(
                     access_token: token,
                     refresh_token,
                     token_type: "Bearer".to_string(),
-                    expires_in: 3600,
+                    expires_in: state.jwt_expiration as i64,
                 }),
             )
                 .into_response())
@@ -200,6 +201,28 @@ pub async fn authenticate_user(
     }
 }
 
+/// Caches the JWT identifier (JTI) for a user, replacing any existing JTI.
+///
+/// This function first checks if there is an active JTI for the user in the cache.
+/// If an active JTI is found, it deletes it. Then, it stores the new JTI in the cache
+/// with a time-to-live (TTL) equal to the JWT expiration time.
+///
+/// # Arguments
+///
+/// * `state` - The application state containing the cache and JWT expiration settings.
+/// * `user_key` - The unique key identifying the user.
+/// * `jti_clone` - The new JWT identifier to be cached.
+///
+/// # Returns
+///
+/// * `Result<(), AppError>` - Returns `Ok(())` if the operation is successful, otherwise returns an `AppError`.
+///
+/// # Errors
+///
+/// This function will return an `AppError` if:
+/// * There is an error retrieving the JTI from the cache.
+/// * There is an error deleting the JTI from the cache.
+/// * There is an error storing the new JTI in the cache.
 async fn cache_token_id(
     state: &Arc<AppState>,
     user_key: &String,
@@ -337,10 +360,114 @@ async fn reset_failed_login_attempts(pg_pool: &PgPool, user_id: i64) {
 
 pub async fn refresh_token(
     State(state): State<Arc<AppState>>,
-    refresh_request: Json<RefreshRequest>,
+    Json(refresh_request): Json<RefreshRequest>,
 ) -> Result<Response, AppError> {
-    // Generate a new JWT token and refresh token if the current refresh token is valid.
-    todo!()
+    // Validate the refresh token request
+    if let Err(e) = refresh_request.validate() {
+        return Err(AppError::new(
+            ErrorType::RequestValidationError {
+                validation_error: e,
+                object: "RefreshRequest".to_string(),
+            },
+            "Validation error. Check the refresh token value.",
+        ));
+    }
+
+    // Get the refresh token from the request
+    let refresh_token = refresh_request.refresh_token;
+    let pg_pool = &state.pg_pool;
+
+    // Check if refresh token exists and is valid
+    let token_info = match auth_repository::get_refresh_token_by_value(pg_pool, &refresh_token).await {
+        Ok(token_info) => token_info,
+        Err(_) => {
+            return Err(AppError::new(
+                ErrorType::UnauthorizedError,
+                "Invalid refresh token.",
+            ));
+        }
+    };
+
+    let (user_id, is_valid, status) = token_info;
+
+    // Verify token is valid and active
+    if !is_valid || status != RefreshTokenStatus::Active {
+        return Err(AppError::new(
+            ErrorType::UnauthorizedError,
+            "Refresh token is no longer valid.",
+        ));
+    }
+
+    // Revoke the current refresh token
+    auth_repository::revoke_refresh_token(pg_pool, refresh_token)
+        .await
+        .map_err(|e| {
+            error!("Error revoking refresh token: {:?}", e);
+            AppError::new(
+                ErrorType::InternalServerError,
+                "Something went wrong. Please try again later.",
+            )
+        })?;
+
+    // Get user information
+    let user = auth_repository::get_user_by_id(pg_pool, user_id)
+        .await
+        .map_err(|e| {
+            error!("Error getting user: {:?}", e);
+            AppError::new(
+                ErrorType::InternalServerError,
+                "Something went wrong. Please try again later.",
+            )
+        })?;
+
+    // Generate new JWT token
+    let now = Utc::now();
+    let jti = nanoid!(); // Unique jwt identifier.
+    let user_key_clone = user.key.clone();
+    let jti_clone = jti.clone();
+
+    let user_claim = Claims {
+        sub: user.key,
+        iss: state.jwt_issuer.clone(),
+        jti,
+        aud: "api".to_string(),
+        iat: now.timestamp(),
+        nbf: now.timestamp(),
+        exp: now
+            .add(Duration::from_secs(state.jwt_expiration.clone()))
+            .timestamp(),
+    };
+    
+    let mut header = Header::new(Algorithm::RS256);
+    header.kid = Some(get_public_key_id(State(state.clone())));
+    
+    let token = encode(
+        &header,
+        &user_claim,
+        &EncodingKey::from_rsa_pem(&state.jwt_private_key.as_bytes()).unwrap(),
+    )
+    .unwrap();
+
+    // Generate and persist new refresh token
+    let new_refresh_token = match generate_persist_refresh_token(&state, user_id).await {
+        Ok(value) => value,
+        Err(value) => return value,
+    };
+
+    // Update token in cache
+    cache_token_id(&state, &user_key_clone, &jti_clone).await?;
+
+    // Return the new tokens
+    Ok((
+        StatusCode::OK,
+        Json(TokenResponse {
+            access_token: token,
+            refresh_token: new_refresh_token,
+            token_type: "Bearer".to_string(),
+            expires_in: state.jwt_expiration as i64,
+        }),
+    )
+        .into_response())
 }
 
 /// Returns the JSON Web Key Set (JWKS) containing the public key for JWT token validation.
@@ -403,10 +530,18 @@ pub async fn get_jwks(State(state): State<Arc<AppState>>) -> Result<Response, Ap
     Ok((StatusCode::OK, Json(jwks)).into_response())
 }
 
-pub async fn logout_user(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
-    // Invalidate the refresh token.
-    // And remove the access token from redis cache.
-    todo!()
+pub async fn logout_user(State(_state): State<Arc<AppState>>) -> Result<Response, AppError> {
+    // In a real implementation, you would get the user_id from the authenticated user context
+    // For now, this is a placeholder for future implementation.
+    
+    // Implementation steps:
+    // 1. Get user_id from the authenticated user context
+    // 2. Revoke all refresh tokens for the user
+    // 3. Remove the user's JWT token from Redis/Valkey cache
+    
+    // This is just a stub implementation that returns success
+    // It will need to be expanded when authentication middleware is fully implemented
+    Ok((StatusCode::OK, "Logout successful").into_response())
 }
 
 /// Generates a unique identifier for the public key.

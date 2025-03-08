@@ -21,12 +21,10 @@
 - Create a refresh token (which is random nano ID) and persist in the database.
 
 ### Validate Auth
-- Takes `token` and `refresh_token` as input.
+- Takes `token` as input.
 - Verify the JWT token in the cache.
-- Verify the refresh token in the database.
-- If both are valid, return the user `key`.
+- If token is valid, return the user `key`.
 - If the JWT token is expired, return `Unauthorized` and ask the user to login again or use refresh token.
-- If the refresh token is expired, return `Unauthorized` and ask the user to login again.
 
 ### Refresh Token
 - Takes `refresh_token` as input.

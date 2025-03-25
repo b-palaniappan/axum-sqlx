@@ -2,15 +2,15 @@
 // Registration (also called create user) - Implemented
 // Login - Implemented with JWT and Refresh token.
 // Passkey based login
-// Forgot password - Work in progress
-// Reset password - Work in progress
+// Forgot password -Implemented.
+// Reset password - Implemented.
+// Change password.
 // Logout - Work in progress
 // TOTP
 // TOTP QR Code.
 // JWT or Auth Token based logged in.
 // Email verification
 // Phone verification - using SMS
-// May be use auth_token and refresh_token, both will be opaque token of size 32 characters of nano id.
 
 use crate::api::model::auth::{
     ForgotPasswordRequest, ForgotPasswordResponse, LogoutRequest, RefreshRequest,
@@ -851,7 +851,21 @@ pub async fn reset_password(
     if new_password != confirm_password {
         return Err(AppError::new(
             ErrorType::BadRequest,
-            "Passwords do not match.",
+            "Password and Confirm password does not match.",
+        ));
+    }
+
+    // Validate password complexity (need to have at least 1 uppercase, 1 lowercase, 1 number and 1 special character)
+    if !new_password.chars().any(|c| c.is_uppercase())
+        || !new_password.chars().any(|c| c.is_lowercase())
+        || !new_password.chars().any(|c| c.is_digit(10))
+        || !new_password
+            .chars()
+            .any(|c| "!@#$%^&*()_+-=[]{}|;':\",.<>?/`~".contains(c))
+    {
+        return Err(AppError::new(
+            ErrorType::BadRequest,
+            "Password must contain at least 1 uppercase letter, 1 lowercase letter, 1 number, and 1 special character.",
         ));
     }
 
@@ -861,7 +875,7 @@ pub async fn reset_password(
         Err(_) => {
             return Err(AppError::new(
                 ErrorType::UnauthorizedError,
-                "Invalid or expired reset token.",
+                "Invalid or expired password reset token.",
             ));
         }
     };
@@ -903,20 +917,12 @@ pub async fn reset_password(
     let password_hmac = mac.finalize().into_bytes().to_vec();
 
     // Step 4: Update the user's password
-    // TODO: Implement update_user_password in the auth_repository
-    sqlx::query!(
-        "UPDATE users SET password_hash = $1, password_hmac = $2, updated_at = $3 WHERE id = $4",
-        password_hash,
-        password_hmac,
-        Utc::now(),
-        user_id
-    )
-    .execute(pg_pool)
-    .await
-    .map_err(|e| {
-        error!("Error updating user password: {:?}", e);
-        AppError::new(ErrorType::InternalServerError, "Failed to update password.")
-    })?;
+    auth_repository::update_user_password(pg_pool, user_id, &password_hash, &password_hmac)
+        .await
+        .map_err(|e| {
+            error!("Error updating user password: {:?}", e);
+            AppError::new(ErrorType::InternalServerError, "Failed to update password.")
+        })?;
 
     // Step 5: Mark the token as used
     if let Err(e) = auth_repository::mark_reset_token_as_used(pg_pool, &token).await {

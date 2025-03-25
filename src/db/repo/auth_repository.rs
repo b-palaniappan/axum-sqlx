@@ -25,7 +25,7 @@ pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Users, sqlx
         r#"
         SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled,
         account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at
-        FROM users WHERE email = $1
+        FROM users WHERE lower(email) = lower($1)
         "#,
         email
     )
@@ -184,6 +184,21 @@ pub async fn add_refresh_token(
     Ok(())
 }
 
+/// Increases the failed login attempts count for a user in the database.
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool.
+/// * `user_id` - The ID of the user whose failed login attempts count needs to be increased.
+///
+/// # Returns
+///
+/// * `Result<(), sqlx::Error>` - On success, returns an empty `Ok(())`.
+///   On failure, returns a `sqlx::Error`.
+///
+/// # Errors
+///
+/// This function will return an error if the query fails.
 pub async fn increase_failed_login_attempts(
     pool: &PgPool,
     user_id: i64,
@@ -197,6 +212,20 @@ pub async fn increase_failed_login_attempts(
     Ok(())
 }
 
+/// Retrieves the active refresh token for a user from the database.
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool.
+/// * `user_id` - The ID of the user whose active refresh token is being retrieved.
+///
+/// # Returns
+///
+/// * `Option<String>` - Returns an `Option` containing the active refresh token as a `String` if found, otherwise returns `None`.
+///
+/// # Errors
+///
+/// This function will return `None` if the query fails or if no active refresh token is found for the given user ID.
 pub async fn get_active_refresh_token(pool: &PgPool, user_id: i64) -> Option<String> {
     let token = sqlx::query!(
         "SELECT token FROM refresh_tokens WHERE user_id = $1 AND is_valid = true AND status = 'ACTIVE'",
@@ -209,9 +238,62 @@ pub async fn get_active_refresh_token(pool: &PgPool, user_id: i64) -> Option<Str
     token
 }
 
+/// Logs out a user by revoking all their active refresh tokens in the database.
+///
+/// This function sets the `is_valid` field to `false` and the `status` field to `REVOKED`
+/// for all refresh tokens associated with the given user ID.
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool.
+/// * `user_id` - The ID of the user whose refresh tokens need to be revoked.
+///
+/// # Returns
+///
+/// * `Result<(), sqlx::Error>` - On success, returns an empty `Ok(())`.
+///   On failure, returns a `sqlx::Error`.
+///
+/// # Errors
+///
+/// This function will return an error if the query fails.
 pub async fn logout_user(pool: &PgPool, user_id: i64) -> Result<(), sqlx::Error> {
     sqlx::query!(
         "UPDATE refresh_tokens SET is_valid = false, status = 'REVOKED' WHERE user_id = $1",
+        user_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Updates a user's password in the database.
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool.
+/// * `user_id` - The ID of the user whose password is being updated.
+/// * `password_hash` - The new hashed password.
+/// * `password_hmac` - The HMAC of the password hash for integrity verification.
+///
+/// # Returns
+///
+/// * `Result<(), sqlx::Error>` - On success, returns an empty `Ok(())`.
+///   On failure, returns a `sqlx::Error`.
+///
+/// # Errors
+///
+/// This function will return an error if the query fails.
+pub async fn update_user_password(
+    pool: &PgPool,
+    user_id: i64,
+    password_hash: &str,
+    password_hmac: &[u8],
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "UPDATE users SET password_hash = $1, password_hmac = $2, updated_at = $3 WHERE id = $4",
+        password_hash,
+        password_hmac,
+        Utc::now(),
         user_id
     )
     .execute(pool)

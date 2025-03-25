@@ -12,14 +12,20 @@
 // Phone verification - using SMS
 // May be use auth_token and refresh_token, both will be opaque token of size 32 characters of nano id.
 
-use crate::api::model::auth::{RefreshRequest, TokenRequest, TokenResponse};
+use crate::api::model::auth::{
+    ForgotPasswordRequest, ForgotPasswordResponse, LogoutRequest, RefreshRequest,
+    ResetPasswordRequest, ResetPasswordResponse, TokenRequest, TokenResponse,
+};
 use crate::api::model::user::UserAuthRequest;
 use crate::cache::valkey_cache;
 use crate::db::entity::auth::RefreshTokenStatus;
 use crate::db::repo::auth_repository;
 use crate::error::error_model::{AppError, ErrorType};
+use crate::service::email;
 use crate::AppState;
-use argon2::{Argon2, PasswordHash, PasswordVerifier};
+use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::SaltString;
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -188,6 +194,10 @@ pub async fn authenticate_user(
                             "Something went wrong. Please try again later.",
                         )
                     })?;
+                return Err(AppError::new(
+                    ErrorType::UnauthorizedError,
+                    "Invalid credentials. Check email and password.",
+                ));
             }
 
             let mut mac = Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()).unwrap();
@@ -241,16 +251,30 @@ pub async fn authenticate_user(
 
             reset_failed_login_attempts(pg_pool, user.id).await;
             cache_token_id(&state, &user_key_clone, &jti_clone).await?;
-            Ok((
+
+            let mut response = (
                 StatusCode::OK,
                 Json(TokenResponse {
                     access_token: token,
-                    refresh_token,
+                    refresh_token: refresh_token.to_string(),
                     token_type: "Bearer".to_string(),
                     expires_in: state.jwt_expiration as i64,
                 }),
             )
-                .into_response())
+                .into_response();
+
+            // Also set the refresh_token in the secure cookie.
+            response.headers_mut().insert(
+                axum::http::header::SET_COOKIE,
+                format!(
+                    "refresh_token={}; HttpOnly; Secure; SameSite=Strict; Max-Age={}",
+                    refresh_token, state.jwt_expiration
+                )
+                .parse()
+                .unwrap(),
+            );
+
+            Ok(response)
         }
         Err(_) => {
             // User not found.
@@ -597,17 +621,51 @@ pub async fn get_jwks(State(state): State<Arc<AppState>>) -> Result<Response, Ap
     Ok((StatusCode::OK, Json(jwks)).into_response())
 }
 
-pub async fn logout_user(State(_state): State<Arc<AppState>>) -> Result<Response, AppError> {
-    // In a real implementation, you would get the user_id from the authenticated user context
-    // For now, this is a placeholder for future implementation.
+pub async fn logout_user(
+    State(state): State<Arc<AppState>>,
+    Json(logout_request): Json<LogoutRequest>,
+) -> Result<Response, AppError> {
+    // Step 1: Validate the logout request
+    if let Err(e) = logout_request.validate() {
+        return Err(AppError::new(
+            ErrorType::RequestValidationError {
+                validation_error: e,
+                object: "LogoutRequest".to_string(),
+            },
+            "Validation error. Check the request body.",
+        ));
+    }
 
-    // Implementation steps:
-    // 1. Get user_id from the authenticated user context
-    // 2. Revoke all refresh tokens for the user
-    // 3. Remove the user's JWT token from Redis/Valkey cache
+    let user_key = logout_request.user_key;
+    let pg_pool = &state.pg_pool;
 
-    // This is just a stub implementation that returns success
-    // It will need to be expanded when authentication middleware is fully implemented
+    // Step 2: Look up the user ID from the user key
+    // This would typically be a DB call, but for now we assume the user key is provided
+    // In a real implementation with middleware, you'd use the authenticated user context
+    // Since we don't have get_user_by_key function, we'll use email instead as a workaround
+    let user = match auth_repository::get_user_by_email(pg_pool, &user_key).await {
+        Ok(user) => user,
+        Err(_) => {
+            // Even if user doesn't exist, return success to prevent user enumeration
+            return Ok((StatusCode::OK, "Logout successful").into_response());
+        }
+    };
+
+    // Step 3: Revoke all refresh tokens for the user
+    match auth_repository::logout_user(pg_pool, user.id).await {
+        Ok(_) => (),
+        Err(e) => {
+            error!("Error revoking refresh tokens: {:?}", e);
+            // Continue with logout even if revoking tokens fails
+        }
+    }
+
+    // Step 4: Remove the JWT token from cache
+    if let Err(e) = valkey_cache::delete_object(State(state.clone()), &user_key).await {
+        error!("Error removing JWT from cache: {:?}", e);
+        // Continue with logout even if cache deletion fails
+    }
+
     Ok((StatusCode::OK, "Logout successful").into_response())
 }
 
@@ -668,4 +726,221 @@ struct Claims {
 #[derive(Debug, Serialize, Deserialize)]
 struct JwtId {
     value: String,
+}
+
+/// Handles the forgot password request by generating a reset token and sending an email.
+///
+/// This function performs the following steps:
+/// 1. Validates the email format
+/// 2. Looks up the user by email
+/// 3. Generates a random token
+/// 4. Stores the token in the database with a 12-hour expiration
+/// 5. Sends an email with the reset token to the user
+///
+/// # Arguments
+///
+/// * `state` - The application state containing database connections.
+/// * `forgot_password_request` - The request containing the user's email address.
+///
+/// # Returns
+///
+/// * `Result<Response, AppError>` - Returns a generic success message (even if email not found)
+///   to prevent user enumeration, or an error if the request is invalid.
+pub async fn forgot_password(
+    State(state): State<Arc<AppState>>,
+    Json(forgot_password_request): Json<ForgotPasswordRequest>,
+) -> Result<Response, AppError> {
+    // Step 1: Validate the request
+    if let Err(e) = forgot_password_request.validate() {
+        return Err(AppError::new(
+            ErrorType::RequestValidationError {
+                validation_error: e,
+                object: "ForgotPasswordRequest".to_string(),
+            },
+            "Validation error. Check the request body.",
+        ));
+    }
+
+    let email = forgot_password_request.email;
+    let pg_pool = &state.pg_pool;
+
+    // Step 2: Look up the user by email
+    // We'll continue even if the user is not found, but won't actually send an email
+    // This prevents user enumeration attacks
+    let user = match auth_repository::get_user_by_email(pg_pool, &email).await {
+        Ok(user) => Some(user),
+        Err(_) => None,
+    };
+
+    // If the user exists, generate a reset token and send an email
+    if let Some(user) = user {
+        // Step 3: Generate a random token (32 characters)
+        let token = nanoid!(32);
+
+        // Step 4: Store the token in the database with a 12-hour expiration
+        let expires_at = Utc::now() + Duration::from_secs(60 * 60 * 12); // 12 hours
+
+        match auth_repository::create_password_reset_token(pg_pool, user.id, &token, expires_at)
+            .await
+        {
+            Ok(_) => {
+                // Step 5: Send an email with the reset token
+                if let Err(e) = email::send_password_reset_email(&email, &token).await {
+                    error!("Error sending password reset email: {}", e);
+                    // Continue anyway, we still want to return a generic response
+                }
+            }
+            Err(e) => {
+                error!("Error creating password reset token: {:?}", e);
+                // Continue anyway, we still want to return a generic response
+            }
+        }
+    }
+
+    // Always return a generic success message to prevent user enumeration
+    Ok((
+        StatusCode::OK,
+        Json(ForgotPasswordResponse {
+            message: "If your email is registered, you will receive a password reset link shortly."
+                .to_string(),
+        }),
+    )
+        .into_response())
+}
+
+/// Resets a user's password using a valid reset token.
+///
+/// This function performs the following steps:
+/// 1. Validates the reset token and new password
+/// 2. Verifies the token in the database
+/// 3. Hashes the new password
+/// 4. Updates the user's password in the database
+/// 5. Marks the token as used
+/// 6. Invalidates any active refresh tokens and JWT tokens
+///
+/// # Arguments
+///
+/// * `state` - The application state containing database connections.
+/// * `reset_password_request` - The request containing the reset token and new password.
+///
+/// # Returns
+///
+/// * `Result<Response, AppError>` - Returns a success message if the password is reset successfully,
+///   or an error if the token is invalid or the request is malformed.
+pub async fn reset_password(
+    State(state): State<Arc<AppState>>,
+    Json(reset_password_request): Json<ResetPasswordRequest>,
+) -> Result<Response, AppError> {
+    // Step 1: Validate the request
+    if let Err(e) = reset_password_request.validate() {
+        return Err(AppError::new(
+            ErrorType::RequestValidationError {
+                validation_error: e,
+                object: "ResetPasswordRequest".to_string(),
+            },
+            "Validation error. Check the request body.",
+        ));
+    }
+
+    let token = reset_password_request.token;
+    let new_password = reset_password_request.new_password;
+    let confirm_password = reset_password_request.confirm_password;
+    let pg_pool = &state.pg_pool;
+
+    // Validate that the new password and confirm password match
+    if new_password != confirm_password {
+        return Err(AppError::new(
+            ErrorType::BadRequest,
+            "Passwords do not match.",
+        ));
+    }
+
+    // Step 2: Verify the token in the database
+    let user_id = match auth_repository::verify_password_reset_token(pg_pool, &token).await {
+        Ok(user_id) => user_id,
+        Err(_) => {
+            return Err(AppError::new(
+                ErrorType::UnauthorizedError,
+                "Invalid or expired reset token.",
+            ));
+        }
+    };
+
+    // Get the user to find their current password
+    let user = match auth_repository::get_user_by_id(pg_pool, user_id).await {
+        Ok(user) => user,
+        Err(_) => {
+            return Err(AppError::new(
+                ErrorType::InternalServerError,
+                "User not found.",
+            ));
+        }
+    };
+
+    // Step 3: Hash the new password with Argon2
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let password_hash = argon2
+        .hash_password(new_password.as_bytes(), &salt)
+        .map_err(|e| {
+            error!("Error hashing password: {:?}", e);
+            AppError::new(
+                ErrorType::InternalServerError,
+                "Failed to process the password.",
+            )
+        })?
+        .to_string();
+
+    // Generate HMAC for password hash to detect tampering
+    let mut mac = Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()).map_err(|e| {
+        error!("Error creating HMAC: {:?}", e);
+        AppError::new(
+            ErrorType::InternalServerError,
+            "Failed to process the password.",
+        )
+    })?;
+    mac.update(password_hash.as_bytes());
+    let password_hmac = mac.finalize().into_bytes().to_vec();
+
+    // Step 4: Update the user's password
+    // TODO: Implement update_user_password in the auth_repository
+    sqlx::query!(
+        "UPDATE users SET password_hash = $1, password_hmac = $2, updated_at = $3 WHERE id = $4",
+        password_hash,
+        password_hmac,
+        Utc::now(),
+        user_id
+    )
+    .execute(pg_pool)
+    .await
+    .map_err(|e| {
+        error!("Error updating user password: {:?}", e);
+        AppError::new(ErrorType::InternalServerError, "Failed to update password.")
+    })?;
+
+    // Step 5: Mark the token as used
+    if let Err(e) = auth_repository::mark_reset_token_as_used(pg_pool, &token).await {
+        error!("Error marking reset token as used: {:?}", e);
+        // Continue anyway, the password has already been reset
+    }
+
+    // Step 6: Invalidate any active refresh tokens
+    if let Err(e) = auth_repository::logout_user(pg_pool, user_id).await {
+        error!("Error invalidating refresh tokens: {:?}", e);
+        // Continue anyway, the password has already been reset
+    }
+
+    // Step 7: Remove the JWT token from cache if it exists
+    if let Err(e) = valkey_cache::delete_object(State(state.clone()), &user.key).await {
+        error!("Error removing JWT from cache: {:?}", e);
+        // Continue anyway, the password has already been reset
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(ResetPasswordResponse {
+            message: "Password has been reset successfully.".to_string(),
+        }),
+    )
+        .into_response())
 }

@@ -1,4 +1,7 @@
-use crate::api::model::auth::{RefreshRequest, TokenRequest, TokenResponse};
+use crate::api::model::auth::{
+    ForgotPasswordRequest, ForgotPasswordResponse, LogoutRequest, RefreshRequest,
+    ResetPasswordRequest, ResetPasswordResponse, TokenRequest, TokenResponse,
+};
 use crate::api::model::user::UserAuthRequest;
 use crate::config::app_config::AppState;
 use crate::error::error_model::{ApiError, AppError};
@@ -7,7 +10,11 @@ use axum::extract::State;
 use axum::response::Response;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use axum_extra::headers::authorization::Bearer;
+use axum_extra::headers::{Authorization, Cookie};
+use axum_extra::TypedHeader;
 use std::sync::Arc;
+use tracing::info;
 
 /// Defines the authentication routes for the application.
 ///
@@ -19,11 +26,14 @@ use std::sync::Arc;
 /// A `Router` instance configured with the authentication routes.
 pub fn auth_routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/", post(authenticate_handler))
+        // .route("/register", post(register_handler))
+        .route("/login", post(authenticate_handler))
         .route("/refresh", post(refresh_token_handler))
         .route("/jwks", get(jwks_handler))
         .route("/logout", delete(logout_handler))
         .route("/validate", post(validate_token_handler))
+        .route("/forgot-password", post(forgot_password_handler))
+        .route("/reset-password", post(reset_password_handler))
 }
 
 // Authentication handler.
@@ -32,7 +42,7 @@ pub fn auth_routes() -> Router<Arc<AppState>> {
 /// Authenticate user with email and password.
 #[utoipa::path(
     post,
-    path = "/auth",
+    path = "/auth/login",
     tag = "Authentication",
     request_body = UserAuthRequest,
     responses(
@@ -116,7 +126,79 @@ async fn jwks_handler(State(state): State<Arc<AppState>>) -> Result<Response, Ap
     auth_service::get_jwks(State(state)).await
 }
 
-async fn logout_handler(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
+/// Logout user
+///
+/// Logout user and invalidate their tokens.
+#[utoipa::path(
+    delete,
+    path = "/auth/logout",
+    tag = "Authentication",
+    request_body = LogoutRequest,
+    responses(
+        (status = 200, description = "Logout successful"),
+        (status = 401, description = "Unauthorized error", body = ApiError),
+        (status = 422, description = "Unprocessable request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    )
+)]
+async fn logout_handler(
+    State(state): State<Arc<AppState>>,
+    TypedHeader(Authorization(bearer)): TypedHeader<Authorization<Bearer>>,
+    TypedHeader(cookie): TypedHeader<Cookie>,
+    Json(logout_request): Json<LogoutRequest>,
+) -> Result<Response, AppError> {
+    // Extract the token from the authorization header
+    let token = bearer.token();
+
+    // Extract cookies
+    let cookies = cookie.get("refresh_token");
+    info!("token: {:?} | Cookies: {:?}", token, cookies);
+
     // Call service method.
-    auth_service::logout_user(State(state)).await
+    auth_service::logout_user(State(state), Json(logout_request)).await
+}
+
+/// Forgot password
+///
+/// Request a password reset link to be sent to the user's email.
+#[utoipa::path(
+    post,
+    path = "/auth/forgot-password",
+    tag = "Authentication",
+    request_body = ForgotPasswordRequest,
+    responses(
+        (status = 200, description = "Password reset email sent", body = ForgotPasswordResponse),
+        (status = 422, description = "Unprocessable request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    )
+)]
+async fn forgot_password_handler(
+    State(state): State<Arc<AppState>>,
+    Json(forgot_password_request): Json<ForgotPasswordRequest>,
+) -> Result<Response, AppError> {
+    // Call service method.
+    auth_service::forgot_password(State(state), Json(forgot_password_request)).await
+}
+
+/// Reset password
+///
+/// Reset a user's password using a valid reset token.
+#[utoipa::path(
+    post,
+    path = "/auth/reset-password",
+    tag = "Authentication",
+    request_body = ResetPasswordRequest,
+    responses(
+        (status = 200, description = "Password reset successful", body = ResetPasswordResponse),
+        (status = 401, description = "Invalid or expired token", body = ApiError),
+        (status = 422, description = "Unprocessable request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    )
+)]
+async fn reset_password_handler(
+    State(state): State<Arc<AppState>>,
+    Json(reset_password_request): Json<ResetPasswordRequest>,
+) -> Result<Response, AppError> {
+    // Call service method.
+    auth_service::reset_password(State(state), Json(reset_password_request)).await
 }

@@ -254,3 +254,116 @@ pub async fn get_refresh_token_by_value(
 
     Ok((user_id, is_valid, result.status))
 }
+
+/// Creates a new password reset token for a user.
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool.
+/// * `user_id` - The ID of the user who is resetting their password.
+/// * `token` - The generated reset token.
+/// * `expires_at` - When the token expires.
+///
+/// # Returns
+///
+/// * `Result<(), sqlx::Error>` - Returns Ok if successful, or an error if the operation fails.
+pub async fn create_password_reset_token(
+    pool: &PgPool,
+    user_id: i64,
+    token: &str,
+    expires_at: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    // First, invalidate any existing reset tokens for this user
+    sqlx::query!(
+        "UPDATE password_reset_tokens SET is_valid = false WHERE user_id = $1 AND is_valid = true",
+        user_id
+    )
+    .execute(pool)
+    .await?;
+
+    // Create the new token
+    sqlx::query!(
+        "INSERT INTO password_reset_tokens (user_id, token, expires_at, is_valid) VALUES ($1, $2, $3, true)",
+        user_id,
+        token,
+        expires_at
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Verify a password reset token.
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool.
+/// * `token` - The reset token to verify.
+///
+/// # Returns
+///
+/// * `Result<i64, sqlx::Error>` - Returns the user ID if the token is valid,
+///   or an error if the token is invalid, expired, or already used.
+pub async fn verify_password_reset_token(pool: &PgPool, token: &str) -> Result<i64, sqlx::Error> {
+    let now = Utc::now();
+
+    let result = sqlx::query!(
+        r#"
+        SELECT user_id, expires_at, is_valid
+        FROM password_reset_tokens
+        WHERE token = $1
+        "#,
+        token
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or(sqlx::Error::RowNotFound)?;
+
+    let user_id = result.user_id;
+    let expires_at = result.expires_at;
+    let is_valid = result.is_valid.unwrap_or(false);
+
+    // Check if token is valid and not expired
+    if !is_valid {
+        return Err(sqlx::Error::RowNotFound);
+    }
+
+    if expires_at < now {
+        // Token is expired, mark it as invalid
+        sqlx::query!(
+            "UPDATE password_reset_tokens SET is_valid = false WHERE token = $1",
+            token
+        )
+        .execute(pool)
+        .await?;
+
+        return Err(sqlx::Error::RowNotFound);
+    }
+
+    Ok(user_id)
+}
+
+/// Mark a password reset token as used.
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool.
+/// * `token` - The reset token to mark as used.
+///
+/// # Returns
+///
+/// * `Result<(), sqlx::Error>` - Returns Ok if successful, or an error if the operation fails.
+pub async fn mark_reset_token_as_used(pool: &PgPool, token: &str) -> Result<(), sqlx::Error> {
+    let now = Utc::now();
+
+    sqlx::query!(
+        "UPDATE password_reset_tokens SET is_valid = false, used_at = $1 WHERE token = $2",
+        now,
+        token
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}

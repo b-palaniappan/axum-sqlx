@@ -35,6 +35,7 @@ sqlx = { version = "^0", features = [
   "chrono",
   "json",
 ] }
+axum-extra = { version = "0.10.0", features = ["cookie-private", "typed-header"] }
 
 # Security
 argon2 = "^0"
@@ -43,6 +44,8 @@ hmac = "^0"
 sha2 = "^0"
 totp-rs = { version = "^5", features = ["qr"] }   # for TOTP 2FA
 webauthn-rs = "^0"  # for passkey based authentication.
+openssl = "^0"
+xxhash-rust = { version = "^0", features = ["xxh3"] } # Extremely fast non-cryptographic hash algorithm
 
 # Async
 tokio = { version = "^1.0", features = ["macros", "rt-multi-thread"] }
@@ -67,5 +70,3 @@ bb8-redis = "^0"
 dotenvy = "^0"
 nanoid = "^0"
 base64 = "^0"
-openssl = "^0"
-xxhash-rust = { version = "^0", features = ["xxh3"] } # Extremely fast non-cryptographic hash algorithm

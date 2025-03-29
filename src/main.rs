@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use crate::api::handler::auth_handler::auth_routes;
 use crate::api::handler::cache_handler::cache_routes;
+use crate::api::handler::passkey_handler::passkey_auth_routes;
 use crate::api::handler::user_handler::user_routes;
 use crate::api::handler::welcome_handler::welcome_routes;
 use crate::config::app_config::{get_server_address, initialize_app_state, AppState};
@@ -16,6 +17,7 @@ use sqlx::types::chrono::Utc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
+use tower_sessions::{cookie::SameSite, Expiry, MemoryStore, SessionManagerLayer};
 use tracing::info;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
@@ -93,18 +95,30 @@ async fn main() {
         // allow requests from localhost only.
         .allow_origin("http://localhost:3000".parse::<HeaderValue>().unwrap());
 
+    // Configure the Tower session manager
+    let session_store = MemoryStore::default();
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_name("webauthnrs")
+        .with_same_site(SameSite::Strict)
+        .with_secure(false) // TODO: change this to true when running on an HTTPS/production server instead of locally
+        .with_expiry(Expiry::OnInactivity(
+            tower_sessions::cookie::time::Duration::seconds(360),
+        )); // 1 hour;
+
     // build our application with a route
     let app = Router::new()
         .nest("/welcome", welcome_routes())
         .nest("/auth", auth_routes())
         .nest("/users", user_routes())
         .nest("/cache", cache_routes())
+        .nest("/passkey", passkey_auth_routes())
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .fallback(page_not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .with_state(shared_state)
         .layer(CompressionLayer::new())
         .layer(TimeoutLayer::new(Duration::from_secs(5)))
+        .layer(session_layer)
         .layer(cors);
 
     // run it

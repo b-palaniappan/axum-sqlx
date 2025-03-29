@@ -6,6 +6,8 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
+use webauthn_rs::prelude::Url;
+use webauthn_rs::{Webauthn, WebauthnBuilder};
 
 /// Initializes the application state by creating and loading PostgreSQL and Redis connection pools.
 ///
@@ -55,9 +57,17 @@ pub async fn initialize_app_state() -> Arc<AppState> {
         .unwrap();
     info!("✅ Redis connection pool initialized");
 
+    // Setup Webauthn.
+    let rp_id = "localhost";
+    let rp_origin = Url::parse("http://localhost:8080").expect("Invalid URL");
+    let builder = WebauthnBuilder::new(rp_id, &rp_origin).expect("Invalid configuration");
+    let builder = builder.rp_name("Axum Webauthn-rs");
+    let webauthn = builder.build().expect("Invalid configuration");
+
     Arc::new(AppState {
         pg_pool,
         redis_pool,
+        webauthn,
         hmac_key,
         jwt_private_key,
         jwt_public_key,
@@ -84,6 +94,7 @@ pub async fn get_server_address() -> String {
 pub struct AppState {
     pub pg_pool: PgPool,
     pub redis_pool: Pool<RedisConnectionManager>,
+    pub webauthn: Webauthn,
     pub hmac_key: String,
     pub jwt_private_key: String,
     pub jwt_public_key: String,

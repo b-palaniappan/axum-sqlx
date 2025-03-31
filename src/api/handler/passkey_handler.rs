@@ -1,12 +1,12 @@
+use crate::api::model::auth::PasskeyRegistrationStartRequest;
 use crate::config::app_config::AppState;
 use crate::error::error_model::AppError;
 use crate::service::auth_service;
 use axum::extract::State;
 use axum::response::Response;
 use axum::routing::post;
-use axum::Router;
+use axum::{Json, Router};
 use std::sync::Arc;
-use tower_sessions::Session;
 
 pub fn passkey_auth_routes() -> Router<Arc<AppState>> {
     Router::new().route("/reg_start", post(registration_start_handler))
@@ -18,10 +18,10 @@ pub fn passkey_auth_routes() -> Router<Arc<AppState>> {
 
 async fn registration_start_handler(
     State(state): State<Arc<AppState>>,
-    session: Session,
+    Json(passkey_registration_request): Json<PasskeyRegistrationStartRequest>,
 ) -> Result<Response, AppError> {
     // Call service method.
-    auth_service::start_registration(State(state), session).await
+    auth_service::start_registration(State(state), Json(passkey_registration_request)).await
 }
 
 // async fn registration_finish_handler(

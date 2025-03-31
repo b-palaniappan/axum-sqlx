@@ -61,8 +61,11 @@ pub async fn initialize_app_state() -> Arc<AppState> {
     let rp_id = "localhost";
     let rp_origin = Url::parse("http://localhost:8080").expect("Invalid URL");
     let builder = WebauthnBuilder::new(rp_id, &rp_origin).expect("Invalid configuration");
-    let builder = builder.rp_name("Axum Webauthn-rs");
-    let webauthn = builder.build().expect("Invalid configuration");
+    let webauthn = builder
+        .rp_name("Axum SQLx application")
+        .timeout(Duration::from_secs(10 * 60)) // allow 10 minutes for registration
+        .build()
+        .expect("Invalid configuration");
 
     Arc::new(AppState {
         pg_pool,

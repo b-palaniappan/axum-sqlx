@@ -13,8 +13,8 @@
 // Phone verification - using SMS
 
 use crate::api::model::auth::{
-    ForgotPasswordRequest, ForgotPasswordResponse, LogoutRequest, RefreshRequest,
-    ResetPasswordRequest, ResetPasswordResponse, TokenRequest, TokenResponse,
+    ForgotPasswordRequest, ForgotPasswordResponse, LogoutRequest, PasskeyRegistrationStartRequest,
+    RefreshRequest, ResetPasswordRequest, ResetPasswordResponse, TokenRequest, TokenResponse,
 };
 use crate::api::model::user::UserAuthRequest;
 use crate::cache::valkey_cache;
@@ -47,7 +47,6 @@ use std::ops::Add;
 use std::string::ToString;
 use std::sync::Arc;
 use std::time::Duration;
-use tower_sessions::Session;
 use tracing::error;
 use tracing::log::info;
 use uuid::Uuid;
@@ -960,10 +959,10 @@ pub async fn reset_password(
 // Display name will be the first name + last name with space in between.
 pub async fn start_registration(
     State(state): State<Arc<AppState>>,
-    session: Session,
+    Json(passkey_registration_start_request): Json<PasskeyRegistrationStartRequest>,
 ) -> Result<Response, AppError> {
     let user_id = "testuser";
-    let display_name = "Test User";
+    let display_name = format!("{} {}", passkey_registration_start_request.first_name, passkey_registration_start_request.last_name);
     let user_passkey_id = Uuid::new_v4();
 
     // TODO: Implement fetching user's existing passkeys from database
@@ -977,10 +976,20 @@ pub async fn start_registration(
         exclude_credentials,
     ) {
         Ok((ccr, reg_state)) => {
-            // session
-            //     .insert("reg_state", (user_id, user_passkey_id, reg_state))
-            //     .await
-            //     .expect("Failed to insert");
+            valkey_cache::set_object_with_ttl(
+                State(state.clone()),
+                &user_passkey_id.to_string(),
+                &reg_state,
+                Duration::from_secs(15 * 60).as_secs(),
+            )
+            .await
+            .map_err(|e| {
+                error!("Error storing Passkey Registration to cache: {:?}", e);
+                AppError::new(
+                    ErrorType::InternalServerError,
+                    "Something went wrong. Please try again later.",
+                )
+            })?;
             info!("Registration Successful!");
             Json(ccr)
         }

@@ -17,7 +17,6 @@ use sqlx::types::chrono::Utc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
-use tower_sessions::{cookie::SameSite, Expiry, MemoryStore, SessionManagerLayer};
 use tracing::info;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
@@ -95,16 +94,6 @@ async fn main() {
         // allow requests from localhost only.
         .allow_origin("http://localhost:3000".parse::<HeaderValue>().unwrap());
 
-    // Configure the Tower session manager
-    let session_store = MemoryStore::default();
-    let session_layer = SessionManagerLayer::new(session_store)
-        .with_name("webauthnrs")
-        .with_same_site(SameSite::Strict)
-        .with_secure(false) // TODO: change this to true when running on an HTTPS/production server instead of locally
-        .with_expiry(Expiry::OnInactivity(
-            tower_sessions::cookie::time::Duration::seconds(360),
-        )); // 1 hour;
-
     // build our application with a route
     let app = Router::new()
         .nest("/welcome", welcome_routes())
@@ -118,7 +107,6 @@ async fn main() {
         .with_state(shared_state)
         .layer(CompressionLayer::new())
         .layer(TimeoutLayer::new(Duration::from_secs(5)))
-        .layer(session_layer)
         .layer(cors);
 
     // run it

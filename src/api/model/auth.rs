@@ -130,3 +130,25 @@ pub struct ResetPasswordResponse {
     #[schema(example = "Password has been reset successfully.")]
     pub message: String,
 }
+
+#[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PasskeyRegistrationStartRequest {
+    #[validate(length(
+        min = 2,
+        max = 50,
+        message = "First name must be between 2 and 50 characters"
+    ))]
+    #[schema(example = "John")]
+    pub first_name: String,
+    #[validate(length(
+        min = 2,
+        max = 50,
+        message = "Last name must be between 2 and 50 characters"
+    ))]
+    #[schema(example = "Doe")]
+    pub last_name: String,
+    #[validate(email(message = "Invalid email address"))]
+    #[schema(example = "me@example.com")]
+    pub email: String,
+}

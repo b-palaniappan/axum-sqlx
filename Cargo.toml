@@ -23,7 +23,6 @@ tower-http = { version = "^0", features = [
   "compression-full",
   "timeout",
 ] }
-tower-sessions = "^0"
 
 # JSON parser
 serde = { version = "^1.0", features = ["derive"] }
@@ -44,7 +43,7 @@ jsonwebtoken = "^9"
 hmac = "^0"
 sha2 = "^0"
 totp-rs = { version = "^5", features = ["qr"] }   # for TOTP 2FA
-webauthn-rs = "^0"  # for passkey based authentication.
+webauthn-rs = { version = "^0", features = ["danger-allow-state-serialisation"]}  # for passkey based authentication.
 openssl = "^0"
 xxhash-rust = { version = "^0", features = ["xxh3"] } # Extremely fast non-cryptographic hash algorithm
 

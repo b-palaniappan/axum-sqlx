@@ -51,6 +51,7 @@ use tracing::error;
 use tracing::log::info;
 use uuid::Uuid;
 use validator::Validate;
+use webauthn_rs::prelude::RegisterPublicKeyCredential;
 use xxhash_rust::xxh3::xxh3_64;
 
 /// Validates a JWT token using the public key.
@@ -1002,4 +1003,37 @@ pub async fn start_registration(
         }
     };
     Ok((StatusCode::OK, res).into_response())
+}
+
+pub async fn finish_registration(
+    State(state): State<Arc<AppState>>,
+    Json(publicKeyCredential): Json<RegisterPublicKeyCredential>,
+) -> Result<Response, AppError> {
+    let user_passkey_id = publicKeyCredential.id.clone();
+    
+    let reg_state = match valkey_cache::get_object(State(state.clone()), &user_passkey_id).await {
+        Ok(reg_state) => reg_state.unwrap(),
+        Err(e) => {
+            error!("Error getting Passkey Registration from cache: {:?}", e);
+            return Err(AppError::new(
+                ErrorType::InternalServerError,
+                "Something went wrong. Please try again later.",
+            ));
+        }
+    };
+    
+    let res = match state.webauthn.finish_passkey_registration(&publicKeyCredential, &reg_state) {
+        Ok(sk) => {
+           StatusCode::NO_CONTENT.into_response()
+        },
+        Err(e) => {
+            error!("finish_registration -> {:?}", e);
+            return Err(AppError::new(
+                ErrorType::InternalServerError,
+                "Something went wrong. Please try again later.",
+            ));
+        }
+    };
+    
+    Ok(res)
 }

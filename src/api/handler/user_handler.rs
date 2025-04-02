@@ -2,7 +2,7 @@ use crate::api::model::user::{
     PaginationQuery, StoredUser, StoredUsers, UpdateUserRequest, UserRequest,
 };
 use crate::config::app_config::AppState;
-use crate::db::entity::user::{AccountStatus, Users};
+use crate::db::repo::user_repository;
 use crate::error::error_model::{ApiError, AppError, ErrorType};
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
@@ -15,9 +15,8 @@ use axum::{Json, Router};
 use hmac::{Hmac, Mac};
 use nanoid::nanoid;
 use sha2::Sha512;
-use sqlx::Error;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::error;
 use validator::Validate;
 
 pub fn user_routes() -> Router<Arc<AppState>> {
@@ -99,22 +98,16 @@ async fn create_user(
     mac.update(password_hash.to_string().as_bytes());
     let password_hmac = mac.finalize();
 
-    let result = sqlx::query!(
-        r#"
-        INSERT INTO users (key, first_name, last_name, email, password_hash, password_hmac) 
-        VALUES ($1, $2, $3, $4, $5, $6) 
-        RETURNING id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, 
-        two_factor_enabled, account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at
-        "#,
+    let result = user_repository::create_user(
+        &state.pg_pool,
         user_key,
         user_request.first_name,
         &user_request.last_name,
         &user_request.email,
-        password_hash.to_string(),
+        &password_hash.to_string(),
         &password_hmac.into_bytes().to_vec(),
     )
-        .fetch_one(&state.pg_pool)
-        .await;
+    .await;
 
     match result {
         Ok(user) => Ok((
@@ -160,24 +153,11 @@ async fn get_users_handler(
 ) -> Result<Response, AppError> {
     let page = query.page;
     let limit = query.size;
-    let users = sqlx::query_as!(
-        Users,
-        r#"
-        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled, 
-        account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at
-        FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2
-        "#,
-        limit,
-        (page - 1) * limit
-    )
-        .fetch_all(&state.pg_pool)
-        .await;
+    let users = user_repository::get_users(&state.pg_pool, limit, page).await;
 
-    let count = sqlx::query!("SELECT COUNT(*) FROM users")
-        .fetch_one(&state.pg_pool)
-        .await
-        .unwrap();
+    let count = user_repository::count_users(&state.pg_pool).await;
     let items_in_page = users.as_ref().unwrap().len();
+    let user_count = count.unwrap_or_else(|_| 0);
 
     match users {
         Ok(users) => Ok((
@@ -185,8 +165,8 @@ async fn get_users_handler(
             Json(StoredUsers {
                 users: users.into_iter().map(|u| StoredUser::from(u)).collect(),
                 current_page: page,
-                total_items: count.count.unwrap(),
-                total_pages: (count.count.unwrap() as f64 / limit as f64).ceil() as i64,
+                total_items: user_count,
+                total_pages: (user_count as f64 / limit as f64).ceil() as i64,
                 items_per_page: limit,
                 items_in_page: items_in_page as i64,
             }),
@@ -220,17 +200,7 @@ async fn get_user_handler(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> Result<Response, AppError> {
-    let user = sqlx::query_as!(
-        Users,
-        r#"
-        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled, 
-        account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at 
-        FROM users WHERE key = $1
-        "#,
-        key
-    )
-        .fetch_one(&state.pg_pool)
-        .await;
+    let user = user_repository::get_user_by_key(&state.pg_pool, &key).await;
 
     match user {
         Ok(user) => Ok((StatusCode::OK, Json(StoredUser::from(user))).into_response()),
@@ -268,30 +238,7 @@ async fn update_user_handler(
     Path(key): Path<String>,
     Json(update_user_request): Json<UpdateUserRequest>,
 ) -> Result<Response, AppError> {
-    let mut query = String::from("UPDATE users SET ");
-    let mut params = Vec::new();
-    let mut set_clauses = Vec::new();
-
-    if let Some(first_name) = &update_user_request.first_name {
-        set_clauses.push("first_name = $".to_owned() + &(params.len() + 1).to_string());
-        params.push(first_name);
-    }
-
-    if let Some(last_name) = &update_user_request.last_name {
-        set_clauses.push("last_name = $".to_owned() + &(params.len() + 1).to_string());
-        params.push(last_name);
-    }
-
-    query += &set_clauses.join(", ");
-    query += &format!(" WHERE key = ${} RETURNING *", params.len() + 1);
-    params.push(&key);
-
-    info!("Patch Query: {}", query);
-    let mut query = sqlx::query_as(&query);
-    for param in &params {
-        query = query.bind(param);
-    }
-    let result: Result<Users, Error> = query.fetch_one(&state.pg_pool).await;
+    let result = user_repository::update_user(&state.pg_pool, &key, update_user_request).await;
 
     match result {
         Ok(user) => Ok((
@@ -332,13 +279,7 @@ async fn delete_user_handler(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> Result<Response, AppError> {
-    let result = sqlx::query_as!(
-        Users,
-        "UPDATE users SET account_status = 'DELETED' WHERE key = $1 AND account_status <> 'DELETED'",
-        key
-    )
-        .fetch_one(&state.pg_pool)
-        .await;
+    let result = user_repository::delete_user(&state.pg_pool, &key).await;
 
     match result {
         Ok(_) => Ok((StatusCode::NO_CONTENT,).into_response()),

@@ -963,7 +963,10 @@ pub async fn start_registration(
     Json(passkey_registration_start_request): Json<PasskeyRegistrationStartRequest>,
 ) -> Result<Response, AppError> {
     let user_id = "testuser";
-    let display_name = format!("{} {}", passkey_registration_start_request.first_name, passkey_registration_start_request.last_name);
+    let display_name = format!(
+        "{} {}",
+        passkey_registration_start_request.first_name, passkey_registration_start_request.last_name
+    );
     let user_passkey_id = Uuid::new_v4();
 
     // TODO: Implement fetching user's existing passkeys from database
@@ -1007,10 +1010,10 @@ pub async fn start_registration(
 
 pub async fn finish_registration(
     State(state): State<Arc<AppState>>,
-    Json(publicKeyCredential): Json<RegisterPublicKeyCredential>,
+    Json(public_key_credential): Json<RegisterPublicKeyCredential>,
 ) -> Result<Response, AppError> {
-    let user_passkey_id = publicKeyCredential.id.clone();
-    
+    let user_passkey_id = public_key_credential.id.clone();
+
     let reg_state = match valkey_cache::get_object(State(state.clone()), &user_passkey_id).await {
         Ok(reg_state) => reg_state.unwrap(),
         Err(e) => {
@@ -1021,11 +1024,12 @@ pub async fn finish_registration(
             ));
         }
     };
-    
-    let res = match state.webauthn.finish_passkey_registration(&publicKeyCredential, &reg_state) {
-        Ok(sk) => {
-           StatusCode::NO_CONTENT.into_response()
-        },
+
+    let res = match state
+        .webauthn
+        .finish_passkey_registration(&public_key_credential, &reg_state)
+    {
+        Ok(_sk) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             error!("finish_registration -> {:?}", e);
             return Err(AppError::new(
@@ -1034,6 +1038,6 @@ pub async fn finish_registration(
             ));
         }
     };
-    
+
     Ok(res)
 }

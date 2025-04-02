@@ -1,62 +1,27 @@
+use crate::db::entity::passkey::PasskeyUsers;
 use sqlx::PgPool;
-use crate::error::error_model::AppError;
-use crate::error::error_model::ErrorType;
 
-pub async fn create_passkey_user(
-    pool: &PgPool,
-    user_id: &str,
-    first_name: &str,
-    last_name: &str,
-    email: &str,
-) -> Result<i64, AppError> {
-    let result = sqlx::query!(
+pub async fn save_passkey_user(
+    pg_pool: &PgPool,
+    user: PasskeyUsers,
+) -> Result<PasskeyUsers, sqlx::Error> {
+    sqlx::query_as!(
+        PasskeyUsers,
         r#"
-        INSERT INTO passkey_users (user_id, first_name, last_name, email)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id
+        INSERT INTO passkey_users (user_id, first_name, last_name, email, email_verified, active, last_login, failed_login_attempts, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING id, user_id, first_name, last_name, email, email_verified, active, last_login, failed_login_attempts, created_at, updated_at, deleted_at
         "#,
-        user_id,
-        first_name,
-        last_name,
-        email
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(|e| {
-        AppError::new(
-            ErrorType::InternalServerError,
-            &format!("Failed to create passkey user: {}", e),
-        )
-    })?;
-
-    Ok(result.id)
+        user.user_id,
+        user.first_name,
+        user.last_name,
+        user.email,
+        user.email_verified,
+        user.active,
+        user.last_login,
+        user.failed_login_attempts,
+        user.created_at,
+        user.updated_at
+    ).fetch_one(pg_pool)
+        .await
 }
-
-pub async fn store_passkey_credential(
-    pool: &PgPool,
-    user_id: i64,
-    credential_id: &[u8],
-    public_key: &[u8],
-    credential_type: &str,
-) -> Result<(), AppError> {
-    sqlx::query!(
-        r#"
-        INSERT INTO passkey_credentials (user_id, credential_id, public_key, credential_type)
-        VALUES ($1, $2, $3, $4)
-        "#,
-        user_id,
-        credential_id,
-        public_key,
-        credential_type
-    )
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        AppError::new(
-            ErrorType::InternalServerError,
-            &format!("Failed to store passkey credential: {}", e),
-        )
-    })?;
-
-    Ok(())
-} 

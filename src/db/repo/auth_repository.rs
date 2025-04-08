@@ -143,7 +143,7 @@ pub async fn deactivate_refresh_token(pool: &PgPool, user_id: i64) -> Result<(),
 
 pub async fn revoke_refresh_token(pool: &PgPool, token: String) -> Result<(), sqlx::Error> {
     sqlx::query!(
-        "UPDATE refresh_tokens SET is_valid = false, status = 'REVOKED' WHERE token = $1",
+        "UPDATE refresh_tokens SET is_valid = false, status = 'REVOKED', used_at = CURRENT_TIMESTAMP WHERE token = $1",
         token
     )
     .execute(pool)

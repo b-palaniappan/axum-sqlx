@@ -48,7 +48,7 @@ openssl = "^0"
 xxhash-rust = { version = "^0", features = ["xxh3"] } # Extremely fast non-cryptographic hash algorithm
 
 # Async
-tokio = { version = "^1.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "^1.44", features = ["macros", "rt-multi-thread"] }
 
 # Logging and tracing
 tracing = "^0"

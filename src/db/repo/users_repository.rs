@@ -31,23 +31,19 @@ pub async fn create_user(
     first_name: Option<String>,
     last_name: &str,
     email: &str,
-    password_hash: &str,
-    password_hmac: &[u8],
 ) -> Result<Users, Error> {
     sqlx::query_as!(
         Users,
         r#"
-        INSERT INTO users (key, first_name, last_name, email, password_hash, password_hmac) 
-        VALUES ($1, $2, $3, $4, $5, $6) 
-        RETURNING id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, 
-        two_factor_enabled, account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at
+        INSERT INTO users (key, first_name, last_name, email) 
+        VALUES ($1, $2, $3, $4) 
+        RETURNING id, key, first_name, last_name, email, email_verified, account_status as "account_status: AccountStatus", 
+            last_login, failed_login_attempts, created_at, updated_at, deleted_at
         "#,
         user_key,
         first_name,
         last_name,
         email,
-        password_hash,
-        password_hmac,
     )
         .fetch_one(pg_pool)
         .await
@@ -77,8 +73,8 @@ pub async fn get_users(pool: &PgPool, limit: i64, page: i64) -> Result<Vec<Users
     sqlx::query_as!(
         Users,
         r#"
-        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled, 
-        account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at
+        SELECT id, key, first_name, last_name, email, email_verified, account_status as "account_status: AccountStatus", 
+               last_login, failed_login_attempts, created_at, updated_at, deleted_at
         FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2
         "#,
         limit,
@@ -136,8 +132,8 @@ pub async fn get_user_by_key(pool: &PgPool, key: &str) -> Result<Users, Error> {
     sqlx::query_as!(
         Users,
         r#"
-        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled, 
-        account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at 
+        SELECT id, key, first_name, last_name, email, email_verified, account_status as "account_status: AccountStatus", 
+               last_login, failed_login_attempts, created_at, updated_at, deleted_at
         FROM users WHERE key = $1
         "#,
         key
@@ -219,7 +215,7 @@ pub async fn update_user(
 pub async fn delete_user(pool: &PgPool, key: &str) -> Result<(), Error> {
     let result = sqlx::query_as!(
         Users,
-        "UPDATE users SET account_status = 'DELETED' WHERE key = $1 AND account_status <> 'DELETED'",
+        "UPDATE users SET account_status = 'DELETED', deleted_at = CURRENT_TIMESTAMP WHERE key = $1 AND account_status <> 'DELETED'",
         key
     )
         .fetch_one(pool)

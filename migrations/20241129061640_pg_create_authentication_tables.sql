@@ -2,6 +2,9 @@
 CREATE TYPE account_status AS ENUM ('ACTIVE', 'INACTIVE', 'PENDING', 'LOCKED', 'DELETED');
 CREATE TYPE two_factor_method AS ENUM ('EMAIL', 'SMS', 'TOTP', 'PASSKEY');
 CREATE TYPE event_type AS ENUM ('LOGIN', 'LOGIN_FAILED', 'PASSWORD_RESET', '2FA_ATTEMPT', 'EMAIL_VERIFICATION', '2FA_SETUP', '2FA_DISABLE', '2FA_BACKUP', '2FA_RECOVERY', 'ACCOUNT_LOCKED', 'ACCOUNT_UNLOCKED', 'ACCOUNT_DELETED', 'ACCOUNT_RESTORED');
+CREATE TYPE refresh_token_status AS ENUM ('ACTIVE', 'INACTIVE', 'REVOKED', 'EXPIRED');
+CREATE TYPE registration_type AS ENUM ('CREDENTIALS', 'PASSKEY', 'OAUTH');
+CREATE TYPE login_type as ENUM ('CREDENTIALS', 'PASSKEY', 'OAUTH');
 
 CREATE TABLE users
 (
@@ -10,18 +13,50 @@ CREATE TABLE users
     first_name            VARCHAR(255),
     last_name             VARCHAR(255)                                       NOT NULL,
     email                 VARCHAR(255) UNIQUE                                NOT NULL,
-    password_hash         VARCHAR(255)                                       NOT NULL,
-    password_hmac         BYTEA                                              NOT NULL,
     email_verified        BOOLEAN                  DEFAULT FALSE,
-    update_password       BOOLEAN                  DEFAULT FALSE,
-    two_factor_enabled    BOOLEAN                  DEFAULT FALSE,
     account_status        account_status                                     NOT NULL DEFAULT 'ACTIVE',
     last_login            TIMESTAMP WITH TIME ZONE,
     failed_login_attempts INTEGER                  DEFAULT 0,
     created_at            TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at            TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+    updated_at            TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    deleted_at            TIMESTAMP WITH TIME ZONE
 );
 CREATE INDEX idx_users_email ON users (email);
+-- Ensure only one active users per email.
+CREATE UNIQUE INDEX idx_one_active_user_per_email ON users (email) WHERE deleted_at IS NULL;
+
+-- Holds the credentials for the user login, including password hash and HMAC.
+-- When password is updated, the old password hash and HMAC should be marked as deleted
+CREATE TABLE user_login_credentials
+(
+    id                 BIGSERIAL PRIMARY KEY,
+    user_id            BIGINT                                             NOT NULL REFERENCES users (id),
+    password_hash      VARCHAR(255)                                       NOT NULL,
+    password_hmac      BYTEA                                              NOT NULL,
+    update_password    BOOLEAN                  DEFAULT FALSE,
+    two_factor_enabled BOOLEAN                  DEFAULT FALSE,
+    created_at         TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    deleted_at         TIMESTAMP WITH TIME ZONE,
+    UNIQUE (user_id, password_hash) -- Ensure no duplicate password hashes for the same use
+);
+
+-- Ensure only one active credential per user
+CREATE UNIQUE INDEX idx_one_active_credential_per_user ON user_login_credentials (user_id) WHERE deleted_at IS NULL;
+
+CREATE TABLE passkey_credentials
+(
+    id              BIGSERIAL PRIMARY KEY,
+    user_id         BIGINT      NOT NULL REFERENCES users (id),
+    credential_id   BYTEA       NOT NULL,
+    public_key      BYTEA       NOT NULL,
+    counter         INTEGER     NOT NULL     DEFAULT 0,
+    credential_type VARCHAR(32) NOT NULL, -- Not sure the use of this.
+    created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    deleted_at      TIMESTAMP WITH TIME ZONE,
+    UNIQUE (credential_id)
+);
+
+CREATE INDEX idx_credentials_user_id ON passkey_credentials (user_id);
 
 -- Password Reset Tokens Table:
 CREATE TABLE password_reset_tokens
@@ -43,7 +78,7 @@ CREATE INDEX idx_password_reset_tokens_token ON password_reset_tokens (token) WH
 CREATE TABLE user_2fa_methods
 (
     id           BIGSERIAL PRIMARY KEY,
-    user_id      BIGINT REFERENCES users (id),
+    user_id      BIGINT            NOT NULL REFERENCES users (id),
     method       two_factor_method NOT NULL,
     is_preferred BOOLEAN                  DEFAULT FALSE,
     is_enabled   BOOLEAN                  DEFAULT FALSE,
@@ -55,7 +90,7 @@ CREATE TABLE user_2fa_methods
 CREATE TABLE user_2fa_email
 (
     id         BIGSERIAL PRIMARY KEY,
-    user_id    BIGINT REFERENCES users (id),
+    user_id    BIGINT       NOT NULL REFERENCES users (id),
     email      VARCHAR(255) NOT NULL,
     verified   BOOLEAN                  DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -66,7 +101,7 @@ CREATE TABLE user_2fa_email
 CREATE TABLE user_2fa_sms
 (
     id           BIGSERIAL PRIMARY KEY,
-    user_id      BIGINT REFERENCES users (id),
+    user_id      BIGINT      NOT NULL REFERENCES users (id),
     phone_number VARCHAR(20) NOT NULL,
     verified     BOOLEAN                  DEFAULT FALSE,
     created_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -77,7 +112,7 @@ CREATE TABLE user_2fa_sms
 CREATE TABLE user_2fa_totp
 (
     id         BIGSERIAL PRIMARY KEY,
-    user_id    BIGINT REFERENCES users (id),
+    user_id    BIGINT      NOT NULL REFERENCES users (id),
     secret     VARCHAR(64) NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -134,7 +169,7 @@ CREATE TABLE auth_audit_log
     status          VARCHAR(50) NOT NULL,
     ip_address      INET,
     user_agent      TEXT,
-    device_id       BIGINT REFERENCES two_factor_devices (id),
+    device_id       BIGINT      NOT NULL REFERENCES two_factor_devices (id),
     timestamp       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     additional_info JSONB -- store additional info as JSON
 );
@@ -152,6 +187,33 @@ CREATE TABLE hmac_key_versions
     CONSTRAINT unique_active_version UNIQUE (version, status)
 );
 
--- Create a Fake User with password hash and HMAC.
-INSERT INTO public.users (key, first_name, last_name, email, password_hash, password_hmac)
-VALUES ('I6xHB0IX5DtT-SnkGEyYJ', 'Fakefname', 'Fakelname', 'fake_user@c12.io', '$argon2id$v=19$m=65536,t=4,p=5$F4mRS8vqq+4+okygQ9oYew$e5Mgx35RcnEYHqZlYKVmP88fo9wiDPtATpbZGVOn+GTzmhL7dPkLZK6whLbvYMKauWKae3Fc8BgOpCwArmqjJw', E'\\xCA8FC3E87FC2066870E79AF15BFD678754B9FC6CCF9D79EDED8BE21218AF115EB15CB5070E7C5DA769E20B2ABF03A40E3E631CC8290DF4C28D1C8EA83C3CD43B');
+CREATE TABLE refresh_tokens
+(
+    id         BIGSERIAL PRIMARY KEY,
+    user_id    BIGINT                   NOT NULL REFERENCES users (id),
+    token      VARCHAR(255)             NOT NULL,
+    status     refresh_token_status     NOT NULL DEFAULT 'ACTIVE',
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    used_at    TIMESTAMP WITH TIME ZONE,
+    is_valid   BOOLEAN                           DEFAULT TRUE
+);
+
+CREATE UNIQUE INDEX one_active_token_per_user ON refresh_tokens (user_id) WHERE is_valid = true;
+
+-- =================================================
+-- Seed initial data for testing purposes
+-- =================================================
+
+-- Insert user and capture the generated ID
+WITH inserted_user AS (
+    INSERT INTO public.users (key, first_name, last_name, email)
+        VALUES ('I6xHB0IX5DtT-SnkGEyYJ', 'Fakefname', 'Fakelname', 'fake_user@c12.io')
+        RETURNING id)
+-- Use the captured ID for the credentials record
+INSERT
+INTO public.user_login_credentials (user_id, password_hash, password_hmac)
+SELECT id,
+       '$argon2id$v=19$m=65536,t=4,p=5$F4mRS8vqq+4+okygQ9oYew$e5Mgx35RcnEYHqZlYKVmP88fo9wiDPtATpbZGVOn+GTzmhL7dPkLZK6whLbvYMKauWKae3Fc8BgOpCwArmqjJw',
+       E'\\xCA8FC3E87FC2066870E79AF15BFD678754B9FC6CCF9D79EDED8BE21218AF115EB15CB5070E7C5DA769E20B2ABF03A40E3E631CC8290DF4C28D1C8EA83C3CD43B'
+FROM inserted_user;

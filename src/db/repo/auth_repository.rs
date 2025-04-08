@@ -23,8 +23,8 @@ pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Users, sqlx
     let user = sqlx::query_as!(
         Users,
         r#"
-        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled,
-        account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at
+        SELECT id, key, first_name, last_name, email, email_verified, account_status as "account_status: AccountStatus",
+               last_login, failed_login_attempts, created_at, updated_at, deleted_at
         FROM users WHERE lower(email) = lower($1)
         "#,
         email
@@ -50,12 +50,12 @@ pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Users, sqlx
 /// # Errors
 ///
 /// This function will return an error if the query fails or if no user is found with the given ID.
-pub async fn get_user_by_id(pool: &PgPool, user_id: i64) -> Result<Users, sqlx::Error> {
+pub async fn get_user_by_id(pool: &PgPool, user_id: &i64) -> Result<Users, sqlx::Error> {
     let user = sqlx::query_as!(
         Users,
         r#"
-        SELECT id, key, first_name, last_name, email, password_hash, password_hmac, email_verified, update_password, two_factor_enabled,
-        account_status as "account_status: AccountStatus", last_login, failed_login_attempts, created_at, updated_at
+        SELECT id, key, first_name, last_name, email, email_verified, account_status as "account_status: AccountStatus", 
+               last_login, failed_login_attempts, created_at, updated_at, deleted_at
         FROM users WHERE id = $1
         "#,
         user_id
@@ -81,7 +81,7 @@ pub async fn get_user_by_id(pool: &PgPool, user_id: i64) -> Result<Users, sqlx::
 /// # Errors
 ///
 /// This function will return an error if the query fails.
-pub async fn lock_user_account(pool: &PgPool, user_id: i64) -> Result<(), sqlx::Error> {
+pub async fn lock_user_account(pool: &PgPool, user_id: &i64) -> Result<(), sqlx::Error> {
     sqlx::query!(
         "UPDATE users SET account_status = 'LOCKED' WHERE id = $1",
         user_id
@@ -201,7 +201,7 @@ pub async fn add_refresh_token(
 /// This function will return an error if the query fails.
 pub async fn increase_failed_login_attempts(
     pool: &PgPool,
-    user_id: i64,
+    user_id: &i64,
 ) -> Result<(), sqlx::Error> {
     sqlx::query!(
         "UPDATE users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = $1",
@@ -289,14 +289,21 @@ pub async fn update_user_password(
     password_hash: &str,
     password_hmac: &[u8],
 ) -> Result<(), sqlx::Error> {
+    // First, mark any existing password credentials as deleted
     sqlx::query!(
-        "UPDATE users SET password_hash = $1, password_hmac = $2, updated_at = $3 WHERE id = $4",
-        password_hash,
-        password_hmac,
-        Utc::now(),
+        "UPDATE user_login_credentials SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 and deleted_at IS NULL",
         user_id
     )
     .execute(pool)
+    .await?;
+
+    // Insert the new password credentials
+    sqlx::query!(
+        "INSERT INTO user_login_credentials (user_id, password_hash, password_hmac) VALUES ($1, $2, $3)",
+        user_id,
+        password_hash,
+        password_hmac
+    ).execute(pool)
     .await?;
     Ok(())
 }
@@ -331,7 +338,7 @@ pub async fn get_refresh_token_by_value(
     .await?
     .ok_or(sqlx::Error::RowNotFound)?;
 
-    let user_id = result.user_id.ok_or_else(|| sqlx::Error::RowNotFound)?;
+    let user_id = result.user_id;
     let is_valid = result.is_valid.unwrap_or(false);
 
     Ok((user_id, is_valid, result.status))

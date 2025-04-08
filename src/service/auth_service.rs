@@ -19,13 +19,14 @@ use crate::api::model::auth::{
 use crate::api::model::user::UserAuthRequest;
 use crate::cache::valkey_cache;
 use crate::db::entity::auth::RefreshTokenStatus;
-use crate::db::repo::auth_repository;
+use crate::db::entity::user::{AccountStatus, Users};
+use crate::db::repo::{auth_repository, user_login_credentials_repository};
 use crate::error::error_model::{AppError, ErrorType};
 use crate::service::email;
 use crate::AppState;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use argon2::{Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -47,8 +48,7 @@ use std::ops::Add;
 use std::string::ToString;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::error;
-use tracing::log::info;
+use tracing::{error, info};
 use uuid::Uuid;
 use validator::Validate;
 use webauthn_rs::prelude::RegisterPublicKeyCredential;
@@ -179,119 +179,192 @@ pub async fn authenticate_user(
     let pg_pool = &state.pg_pool;
     let user = auth_repository::get_user_by_email(pg_pool, &user_auth_request.email).await;
 
-    let argon2 = Argon2::default();
     match user {
         Ok(user) => {
-            let password_hash = PasswordHash::new(&user.password_hash).unwrap();
-            // TODO: Only do auth check if the user status is active.
-            if argon2
-                .verify_password(user_auth_request.password.as_bytes(), &password_hash)
-                .is_err()
-            {
-                handle_user_authentication_failed(pg_pool, user.id)
-                    .await
-                    .map_err(|e| {
-                        error!("Error handling user authentication failed: {:?}", e);
-                        AppError::new(
-                            ErrorType::InternalServerError,
-                            "Something went wrong. Please try again later.",
-                        )
-                    })?;
-                return Err(AppError::new(
-                    ErrorType::UnauthorizedError,
-                    "Invalid credentials. Check email and password.",
-                ));
-            }
-
-            let mut mac = Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()).unwrap();
-            mac.update(&user.password_hash.as_bytes());
-            if mac.verify_slice(&user.password_hmac).is_err() {
-                handle_user_authentication_failed(pg_pool, user.id)
-                    .await
-                    .map_err(|e| {
-                        error!("Error handling user authentication failed: {:?}", e);
-                        AppError::new(
-                            ErrorType::InternalServerError,
-                            "Something went wrong. Please try again later.",
-                        )
-                    })?;
-                return Err(AppError::new(
-                    ErrorType::UnauthorizedError,
-                    "Invalid credentials. Check email and password.",
-                ));
-            }
-
-            // Generate access token.
-            let now = Utc::now();
-            let jti = nanoid!(); // Unique jwt identifier.
-            let user_key_clone = user.key.clone();
-            let jti_clone = jti.clone();
-
-            let user_claim = Claims {
-                sub: user.key,
-                iss: state.jwt_issuer.clone(),
-                jti,
-                aud: "api".to_string(),
-                iat: now.timestamp(),
-                nbf: now.timestamp(),
-                exp: now
-                    .add(Duration::from_secs(state.jwt_expiration.clone()))
-                    .timestamp(),
-            };
-            let mut header = Header::new(Algorithm::RS256);
-            header.kid = Some(get_public_key_id(State(state.clone())));
-            let token = encode(
-                &header,
-                &user_claim,
-                &EncodingKey::from_rsa_pem(&state.jwt_private_key.as_bytes()).unwrap(),
-            )
-            .unwrap();
-
-            let refresh_token = match generate_persist_refresh_token(&state, user.id).await {
-                Ok(value) => value,
-                Err(value) => return value,
-            };
-
-            reset_failed_login_attempts(pg_pool, user.id).await;
-            cache_token_id(&state, &user_key_clone, &jti_clone).await?;
-
-            let mut response = (
-                StatusCode::OK,
-                Json(TokenResponse {
-                    access_token: token,
-                    refresh_token: refresh_token.to_string(),
-                    token_type: "Bearer".to_string(),
-                    expires_in: state.jwt_expiration as i64,
-                }),
-            )
-                .into_response();
-
-            // Also set the refresh_token in the secure cookie.
-            response.headers_mut().insert(
-                axum::http::header::SET_COOKIE,
-                format!(
-                    "refresh_token={}; HttpOnly; Secure; SameSite=Strict; Max-Age={}",
-                    refresh_token, state.jwt_expiration
+            // User found, now check the password if its status is active
+            if user.account_status == AccountStatus::Active {
+                match user_login_credentials_repository::get_user_login_credentials_by_user_id(
+                    pg_pool, &user.id,
                 )
-                .parse()
-                .unwrap(),
-            );
-
-            Ok(response)
+                .await
+                {
+                    Ok(Some(credentials)) => {
+                        let credential_verification = verify_password_hash_hmac(
+                            &state,
+                            &user_auth_request,
+                            &credentials.password_hash,
+                            &credentials.password_hmac,
+                            &user.id,
+                        )
+                        .await;
+                        match credential_verification {
+                            Ok(_) => {
+                                let refresh_token =
+                                    match generate_persist_refresh_token(&state, user.id).await {
+                                        Ok(value) => value,
+                                        Err(value) => return value,
+                                    };
+                                generate_access_token(&state, pg_pool, user, &refresh_token).await
+                            }
+                            Err(e) => {
+                                error!("Password verification failed: {:?}", e);
+                                return Err(AppError::new(
+                                    ErrorType::UnauthorizedError,
+                                    "Invalid credentials. Check email and password.",
+                                ));
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        error!("User login credentials not found for user ID: {}", user.id);
+                        return Err(AppError::new(
+                            ErrorType::UnauthorizedError,
+                            "Invalid credentials. Check email and password.",
+                        ));
+                    }
+                    Err(e) => {
+                        error!("Error getting user login credentials: {:?}", e);
+                        return Err(AppError::new(
+                            ErrorType::InternalServerError,
+                            "Something went wrong. Please try again later.",
+                        ));
+                    }
+                }
+            } else {
+                // Trigger a fake check for inactive user.
+                run_fake_password_hash_check(state).await
+            }
         }
         Err(_) => {
             // User not found.
-            // Still trigger a fake check to avoid returning immediately.
-            // Which can be used by hacker to figure out user id is not valid.
-            let dummy_password_hash = state.dummy_hashed_password.clone();
-            let password_hash = PasswordHash::new(&*dummy_password_hash).unwrap();
-            let _ = argon2.verify_password("dummy".as_bytes(), &password_hash);
-            Err(AppError::new(
-                ErrorType::UnauthorizedError,
-                "Invalid credentials. Check email and password.",
-            ))
+            run_fake_password_hash_check(state).await
         }
     }
+}
+
+async fn run_fake_password_hash_check(state: Arc<AppState>) -> Result<Response, AppError> {
+    let argon2 = Argon2::default();
+
+    // Trigger a fake check to avoid returning immediately.
+    // Which can be used by hacker to figure out user id is not valid.
+    let dummy_password_hash = state.dummy_hashed_password.clone();
+    let password_hash = PasswordHash::new(&*dummy_password_hash).unwrap();
+    let _ = argon2.verify_password("dummy".as_bytes(), &password_hash);
+    Err(AppError::new(
+        ErrorType::UnauthorizedError,
+        "Invalid credentials. Check email and password.",
+    ))
+}
+
+async fn verify_password_hash_hmac(
+    state: &Arc<AppState>,
+    user_auth_request: &UserAuthRequest,
+    password_hash: &String,
+    password_hmac: &[u8],
+    user_id: &i64,
+) -> Result<(), AppError> {
+    let pg_pool = &state.pg_pool;
+    let parsed_hash = PasswordHash::new(password_hash).unwrap();
+
+    if Argon2::default()
+        .verify_password(user_auth_request.password.as_bytes(), &parsed_hash)
+        .is_err()
+    {
+        error!("Password verification failed for user ID: {}", user_id);
+        handle_user_authentication_failed(pg_pool, user_id)
+            .await
+            .map_err(|e| {
+                error!("Error handling user authentication failed: {:?}", e);
+                AppError::new(
+                    ErrorType::InternalServerError,
+                    "Something went wrong. Please try again later.",
+                )
+            })?;
+        return Err(AppError::new(
+            ErrorType::UnauthorizedError,
+            "Invalid credentials. Check email and password.",
+        ));
+    }
+
+    let mut mac = Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()).unwrap();
+    mac.update(password_hash.as_bytes());
+    if mac.verify_slice(password_hmac).is_err() {
+        error!("HMAC verification failed for user ID: {}", user_id);
+        handle_user_authentication_failed(pg_pool, user_id)
+            .await
+            .map_err(|e| {
+                error!("Error handling user authentication failed: {:?}", e);
+                AppError::new(
+                    ErrorType::InternalServerError,
+                    "Something went wrong. Please try again later.",
+                )
+            })?;
+        return Err(AppError::new(
+            ErrorType::UnauthorizedError,
+            "Invalid credentials. Check email and password.",
+        ));
+    }
+    Ok(())
+}
+
+async fn generate_access_token(
+    state: &Arc<AppState>,
+    pg_pool: &PgPool,
+    user: Users,
+    refresh_token: &String,
+) -> Result<Response, AppError> {
+    // Generate access token.
+    let now = Utc::now();
+    let jti = nanoid!(); // Unique jwt identifier.
+    let user_key_clone = user.key.clone();
+    let jti_clone = jti.clone();
+
+    let user_claim = Claims {
+        sub: user.key,
+        iss: state.jwt_issuer.clone(),
+        jti,
+        aud: "api".to_string(),
+        iat: now.timestamp(),
+        nbf: now.timestamp(),
+        exp: now
+            .add(Duration::from_secs(state.jwt_expiration.clone()))
+            .timestamp(),
+    };
+    let mut header = Header::new(Algorithm::RS256);
+    header.kid = Some(get_public_key_id(State(state.clone())));
+    let token = encode(
+        &header,
+        &user_claim,
+        &EncodingKey::from_rsa_pem(&state.jwt_private_key.as_bytes()).unwrap(),
+    )
+    .unwrap();
+
+    reset_failed_login_attempts(pg_pool, user.id).await;
+    cache_token_id(&state, &user_key_clone, &jti_clone).await?;
+
+    let mut response = (
+        StatusCode::OK,
+        Json(TokenResponse {
+            access_token: token,
+            refresh_token: refresh_token.to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: state.jwt_expiration as i64,
+        }),
+    )
+        .into_response();
+
+    // Also set the refresh_token in the secure cookie.
+    response.headers_mut().insert(
+        axum::http::header::SET_COOKIE,
+        format!(
+            "refresh_token={}; HttpOnly; Secure; SameSite=Strict; Max-Age={}",
+            refresh_token, state.jwt_expiration
+        )
+        .parse()
+        .unwrap(),
+    );
+
+    Ok(response)
 }
 
 /// Caches the JWT identifier (JTI) for a user, replacing any existing JTI.
@@ -421,7 +494,10 @@ async fn generate_persist_refresh_token(
 }
 
 // Update failed login attempts for user.
-async fn handle_user_authentication_failed(pg_pool: &PgPool, user_id: i64) -> Result<(), AppError> {
+async fn handle_user_authentication_failed(
+    pg_pool: &PgPool,
+    user_id: &i64,
+) -> Result<(), AppError> {
     auth_repository::increase_failed_login_attempts(pg_pool, user_id)
         .await
         .unwrap();
@@ -504,7 +580,7 @@ pub async fn refresh_token(
         })?;
 
     // Get user information
-    let user = auth_repository::get_user_by_id(pg_pool, user_id)
+    let user = auth_repository::get_user_by_id(pg_pool, &user_id)
         .await
         .map_err(|e| {
             error!("Error getting user: {:?}", e);
@@ -884,7 +960,7 @@ pub async fn reset_password(
     };
 
     // Get the user to find their current password
-    let user = match auth_repository::get_user_by_id(pg_pool, user_id).await {
+    let user = match auth_repository::get_user_by_id(pg_pool, &user_id).await {
         Ok(user) => user,
         Err(_) => {
             return Err(AppError::new(
@@ -898,7 +974,13 @@ pub async fn reset_password(
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
     let password_hash = argon2
-        .hash_password(new_password.as_bytes(), &salt)
+        .hash_password_customized(
+            new_password.as_bytes(),
+            Some(argon2::Algorithm::Argon2id.ident()),
+            Some(19),
+            Params::new(65536, 4, 5, Some(64)).unwrap(),
+            &salt,
+        )
         .map_err(|e| {
             error!("Error hashing password: {:?}", e);
             AppError::new(
@@ -954,6 +1036,19 @@ pub async fn reset_password(
         .into_response())
 }
 
+/**
+* Registration Flow:
+* 1. User provides email address only.
+* 2. If the email exists, then return the existing user ID as `exclude_credentials` and send the response.
+* 3. If the email does not exist, generate a new user ID and store it in the database.
+* 4. Generate a passkey registration challenge and store it in cache with a TTL.
+* 5. Return the challenge to the user for registration.
+* FINISH REGISTRATION
+* 6. User completes the registration by providing the public key credential.
+* 7. Store the public key in the DB and complete the registration.
+* 8. Request the user to complete the First Name and Last Name, Update the DB with contact info.
+*/
+
 // TODO: For Registration get, First name, last name, and email.
 // then store to DB with pass key UUID.
 // User ID will the unique internal ID (NanoId) generated by the system.
@@ -969,8 +1064,9 @@ pub async fn start_registration(
     );
     let user_passkey_id = Uuid::new_v4();
 
-    // TODO: Implement fetching user's existing passkeys from database
+    // TODO: Implement fetching user's existing unique user id if the email already exists.
     // For now, we'll pass None as exclude_credentials since we don't have users field in AppState
+    // Get the list of UUID we have in the DB for the email address provided by the user.
     let exclude_credentials = None;
 
     let res = match state.webauthn.start_passkey_registration(

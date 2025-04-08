@@ -2,7 +2,7 @@ use crate::api::model::user::{
     PaginationQuery, StoredUser, StoredUsers, UpdateUserRequest, UserRequest,
 };
 use crate::config::app_config::AppState;
-use crate::db::repo::user_repository;
+use crate::db::repo::{user_login_credentials_repository, users_repository};
 use crate::error::error_model::{ApiError, AppError, ErrorType};
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
@@ -98,29 +98,45 @@ async fn create_user(
     mac.update(password_hash.to_string().as_bytes());
     let password_hmac = mac.finalize();
 
-    let result = user_repository::create_user(
+    let result = users_repository::create_user(
         &state.pg_pool,
         user_key,
         user_request.first_name,
         &user_request.last_name,
         &user_request.email,
-        &password_hash.to_string(),
-        &password_hmac.into_bytes().to_vec(),
     )
     .await;
 
     match result {
-        Ok(user) => Ok((
-            StatusCode::CREATED,
-            [(header::LOCATION, format!("/users/{}", user.key))],
-            Json(StoredUser {
-                key: user.key,
-                first_name: user.first_name,
-                last_name: user.last_name,
-                email: user.email,
-            }),
-        )
-            .into_response()),
+        Ok(user) => {
+            user_login_credentials_repository::create_user_login_credentials(
+                &state.pg_pool,
+                user.id,
+                &password_hash.to_string(),
+                password_hmac.into_bytes().as_ref(),
+            )
+            .await
+            .map_err(|e| {
+                error!("Error storing user login credentials: {:?}", e);
+                AppError::new(
+                    ErrorType::InternalServerError,
+                    "Error storing user login credentials",
+                )
+            })?;
+
+            // Successfully created user and stored credentials
+            Ok((
+                StatusCode::CREATED,
+                [(header::LOCATION, format!("/users/{}", user.key))],
+                Json(StoredUser {
+                    key: user.key,
+                    first_name: user.first_name,
+                    last_name: user.last_name,
+                    email: user.email,
+                }),
+            )
+                .into_response())
+        }
         Err(e) => {
             error!("Error creating user. {:?}", e);
             Err(AppError::new(
@@ -153,9 +169,9 @@ async fn get_users_handler(
 ) -> Result<Response, AppError> {
     let page = query.page;
     let limit = query.size;
-    let users = user_repository::get_users(&state.pg_pool, limit, page).await;
+    let users = users_repository::get_users(&state.pg_pool, limit, page).await;
 
-    let count = user_repository::count_users(&state.pg_pool).await;
+    let count = users_repository::count_users(&state.pg_pool).await;
     let items_in_page = users.as_ref().unwrap().len();
     let user_count = count.unwrap_or_else(|_| 0);
 
@@ -200,7 +216,7 @@ async fn get_user_handler(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> Result<Response, AppError> {
-    let user = user_repository::get_user_by_key(&state.pg_pool, &key).await;
+    let user = users_repository::get_user_by_key(&state.pg_pool, &key).await;
 
     match user {
         Ok(user) => Ok((StatusCode::OK, Json(StoredUser::from(user))).into_response()),
@@ -238,7 +254,7 @@ async fn update_user_handler(
     Path(key): Path<String>,
     Json(update_user_request): Json<UpdateUserRequest>,
 ) -> Result<Response, AppError> {
-    let result = user_repository::update_user(&state.pg_pool, &key, update_user_request).await;
+    let result = users_repository::update_user(&state.pg_pool, &key, update_user_request).await;
 
     match result {
         Ok(user) => Ok((
@@ -279,7 +295,7 @@ async fn delete_user_handler(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> Result<Response, AppError> {
-    let result = user_repository::delete_user(&state.pg_pool, &key).await;
+    let result = users_repository::delete_user(&state.pg_pool, &key).await;
 
     match result {
         Ok(_) => Ok((StatusCode::NO_CONTENT,).into_response()),

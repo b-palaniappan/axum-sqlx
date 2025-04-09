@@ -1,6 +1,6 @@
 use crate::cache::valkey_cache;
 use crate::config::app_config::AppState;
-use crate::error::error_model::{AppError, ErrorType};
+use crate::error::error_model::{AppError, ErrorType, ApiError};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::sync::Arc;
 use tracing::error;
+use utoipa::ToSchema;
+use validator::Validate;
 
 pub fn cache_routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -19,7 +21,7 @@ pub fn cache_routes() -> Router<Arc<AppState>> {
         .route("/delete/{key}", delete(cache_delete))
 }
 
-/// Handles the request to set a cache entry.
+/// Set a cache entry.
 ///
 /// # Arguments
 ///
@@ -34,6 +36,16 @@ pub fn cache_routes() -> Router<Arc<AppState>> {
 ///
 /// This function will return an `AppError` if:
 /// * There is an error setting the cache entry.
+#[utoipa::path(
+    post,
+    path = "/cache/set",
+    tag = "Cache",
+    request_body = CacheDataRequest,
+    responses(
+        (status = 200, description = "Cache entry set successfully", body = CacheDataRequest),
+        (status = 500, description = "Internal server error", body = ApiError),
+    )
+)]
 async fn cache_set(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CacheDataRequest>,
@@ -51,7 +63,7 @@ async fn cache_set(
     }
 }
 
-/// Handles the request to set a cache entry with a time-to-live (TTL).
+/// Set a cache entry with a time-to-live (TTL).
 ///
 /// # Arguments
 ///
@@ -66,6 +78,16 @@ async fn cache_set(
 ///
 /// This function will return an `AppError` if:
 /// * There is an error setting the cache entry with TTL.
+#[utoipa::path(
+    post,
+    path = "/cache/set-ttl",
+    tag = "Cache",
+    request_body = CacheDataRequest,
+    responses(
+        (status = 200, description = "Cache entry set successfully", body = CacheDataRequest),
+        (status = 500, description = "Internal server error", body = ApiError),
+    )
+)]
 async fn cache_set_ttl(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CacheDataRequest>,
@@ -83,7 +105,7 @@ async fn cache_set_ttl(
     }
 }
 
-/// Handles the request to get a cache entry.
+/// Get a cache entry.
 ///
 /// # Arguments
 ///
@@ -99,6 +121,19 @@ async fn cache_set_ttl(
 /// This function will return an `AppError` if:
 /// * The requested data is not found in the cache.
 /// * There is an error retrieving the data from the cache.
+#[utoipa::path(
+    get,
+    path = "/cache/get/{key}",
+    tag = "Cache",
+    params(
+        ("key" = String, Path, description = "Cache key to retrieve")
+    ),
+    responses(
+        (status = 200, description = "Cache entry retrieved successfully", body = CacheDataRequest),
+        (status = 404, description = "Cache entry not found", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    )
+)]
 async fn cache_get(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(key): axum::extract::Path<String>,
@@ -121,7 +156,7 @@ async fn cache_get(
     }
 }
 
-/// Handles the request to delete a cache entry.
+/// Delete a cache entry.
 ///
 /// # Arguments
 ///
@@ -136,6 +171,18 @@ async fn cache_get(
 ///
 /// This function will return an `AppError` if:
 /// * There is an error deleting the data from the cache.
+#[utoipa::path(
+    delete,
+    path = "/cache/delete/{key}",
+    tag = "Cache",
+    params(
+        ("key" = String, Path, description = "Cache key to delete")
+    ),
+    responses(
+        (status = 204, description = "Cache entry deleted successfully"),
+        (status = 500, description = "Internal server error", body = ApiError),
+    )
+)]
 async fn cache_delete(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(key): axum::extract::Path<String>,
@@ -154,10 +201,26 @@ async fn cache_delete(
 }
 
 /// Sample request to be saved to cache.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct CacheDataRequest {
+    #[validate(length(
+        min = 21,
+        max = 21,
+        message = "ID must be 21 characters"
+    ))]
+    #[schema(example = "dd48ennqEdUNsklxbXvAY")]
     pub id: String,
+
+    #[validate(length(
+        min = 2,
+        max = 255,
+        message = "Name must be between 2 and 255r characters"
+    ))]
+    #[schema(example = "John Doe")]
     pub name: String,
+
+    #[validate(email(message = "Invalid email address"))]
+    #[schema(example = "john@example.com")]
     pub email: String,
 }

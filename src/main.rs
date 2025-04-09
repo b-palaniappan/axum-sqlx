@@ -57,8 +57,35 @@ async fn main() {
         tags(
             (name = "Users", description = "User management API")
         ),
-        paths(api::handler::user_handler::create_user_handler, api::handler::user_handler::get_users_handler, api::handler::user_handler::get_user_handler, api::handler::user_handler::update_user_handler, api::handler::user_handler::delete_user_handler, api::handler::welcome_handler::welcome_handler, api::handler::auth_handler::authenticate_handler, api::handler::auth_handler::refresh_token_handler, api::handler::auth_handler::jwks_handler),
-        components(schemas(api::model::user::UserRequest, api::model::user::UpdateUserRequest, api::model::user::StoredUser, api::model::user::StoredUsers, api::model::user::Message, ApiError, error::error_model::ValidationError, api::model::user::UserAuthRequest, api::model::auth::TokenResponse)),
+        paths(
+            api::handler::user_handler::create_user_handler,
+            api::handler::user_handler::get_users_handler,
+            api::handler::user_handler::get_user_handler,
+            api::handler::user_handler::update_user_handler,
+            api::handler::user_handler::delete_user_handler,
+            api::handler::welcome_handler::welcome_handler,
+            api::handler::auth_handler::authenticate_handler,
+            api::handler::auth_handler::refresh_token_handler,
+            api::handler::auth_handler::jwks_handler,
+            api::handler::auth_handler::logout_handler,
+            api::handler::auth_handler::forgot_password_handler,
+            api::handler::auth_handler::reset_password_handler,
+            api::handler::cache_handler::cache_set,
+            api::handler::cache_handler::cache_set_ttl,
+            api::handler::cache_handler::cache_get,
+            api::handler::cache_handler::cache_delete,
+        ),
+        components(schemas(
+            api::model::user::UserRequest,
+            api::model::user::UpdateUserRequest,
+            api::model::user::StoredUser,
+            api::model::user::StoredUsers,
+            api::model::user::Message,
+            ApiError,
+            error::error_model::ValidationError,
+            api::model::user::UserAuthRequest,
+            api::model::auth::TokenResponse
+        )),
     )]
     struct ApiDoc;
     struct SecurityAddon;

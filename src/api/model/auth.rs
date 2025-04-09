@@ -133,7 +133,7 @@ pub struct ResetPasswordResponse {
 
 #[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct PasskeyRegistrationStartRequest {
+pub struct PasskeyRegistrationRequest {
     #[validate(length(
         min = 2,
         max = 50,

@@ -13,7 +13,7 @@
 // Phone verification - using SMS
 
 use crate::api::model::auth::{
-    ForgotPasswordRequest, ForgotPasswordResponse, LogoutRequest, PasskeyRegistrationStartRequest,
+    ForgotPasswordRequest, ForgotPasswordResponse, LogoutRequest, PasskeyRegistrationRequest,
     RefreshRequest, ResetPasswordRequest, ResetPasswordResponse, TokenRequest, TokenResponse,
 };
 use crate::api::model::user::UserAuthRequest;
@@ -242,6 +242,24 @@ pub async fn authenticate_user(
     }
 }
 
+/// Performs a fake password hash verification to mitigate user enumeration attacks.
+///
+/// This function triggers a fake password hash verification to ensure that the response time
+/// remains consistent regardless of whether the user ID exists or not. This prevents attackers
+/// from determining the validity of a user ID based on response time.
+///
+/// # Arguments
+///
+/// * `state` - The application state containing the dummy hashed password.
+///
+/// # Returns
+///
+/// * `Result<Response, AppError>` - Always returns an `AppError` with an unauthorized error message.
+///
+/// # Errors
+///
+/// This function will always return an `AppError` with the message "Invalid credentials. Check email and password."
+/// to simulate a failed authentication attempt.
 async fn run_fake_password_hash_check(state: Arc<AppState>) -> Result<Response, AppError> {
     let argon2 = Argon2::default();
 
@@ -256,6 +274,33 @@ async fn run_fake_password_hash_check(state: Arc<AppState>) -> Result<Response, 
     ))
 }
 
+/// Verifies the password hash and HMAC for a user.
+///
+/// This function performs two levels of verification:
+/// 1. It verifies the provided password against the stored password hash using the Argon2 algorithm.
+/// 2. It verifies the integrity of the password hash using an HMAC to ensure it has not been tampered with.
+///
+/// If either verification fails, the function logs the failure, updates the user's failed login attempts,
+/// and returns an `AppError`.
+///
+/// # Arguments
+///
+/// * `state` - A reference to the application state containing the HMAC key and database connection pool.
+/// * `user_auth_request` - The user authentication request containing the plaintext password to verify.
+/// * `password_hash` - The stored password hash to verify against.
+/// * `password_hmac` - The HMAC of the stored password hash for integrity verification.
+/// * `user_id` - The ID of the user whose password is being verified.
+///
+/// # Returns
+///
+/// * `Result<(), AppError>` - Returns `Ok(())` if both verifications succeed, otherwise returns an `AppError`.
+///
+/// # Errors
+///
+/// This function will return an `AppError` if:
+/// * The password verification fails.
+/// * The HMAC verification fails.
+/// * There is an error updating the user's failed login attempts in the database.
 async fn verify_password_hash_hmac(
     state: &Arc<AppState>,
     user_auth_request: &UserAuthRequest,
@@ -307,6 +352,29 @@ async fn verify_password_hash_hmac(
     Ok(())
 }
 
+/// Generates a new access token for a user and prepares the response.
+///
+/// This function creates a JWT access token for the given user, caches the token identifier (JTI),
+/// and resets the user's failed login attempts. It also sets the refresh token in a secure cookie
+/// and returns the access token and refresh token in the response.
+///
+/// # Arguments
+///
+/// * `state` - A reference to the application state containing JWT settings and the HMAC key.
+/// * `pg_pool` - A reference to the PostgreSQL connection pool.
+/// * `user` - The user for whom the access token is being generated.
+/// * `refresh_token` - The refresh token to include in the response.
+///
+/// # Returns
+///
+/// * `Result<Response, AppError>` - Returns an HTTP response containing the access token and refresh token
+///   if successful, otherwise returns an `AppError`.
+///
+/// # Errors
+///
+/// This function will return an `AppError` if:
+/// * There is an error caching the token identifier (JTI).
+/// * There is an error resetting the user's failed login attempts.
 async fn generate_access_token(
     state: &Arc<AppState>,
     pg_pool: &PgPool,
@@ -590,54 +658,11 @@ pub async fn refresh_token(
             )
         })?;
 
-    // Generate new JWT token
-    let now = Utc::now();
-    let jti = nanoid!(); // Unique jwt identifier.
-    let user_key_clone = user.key.clone();
-    let jti_clone = jti.clone();
-
-    let user_claim = Claims {
-        sub: user.key,
-        iss: state.jwt_issuer.clone(),
-        jti,
-        aud: "api".to_string(),
-        iat: now.timestamp(),
-        nbf: now.timestamp(),
-        exp: now
-            .add(Duration::from_secs(state.jwt_expiration.clone()))
-            .timestamp(),
-    };
-
-    let mut header = Header::new(Algorithm::RS256);
-    header.kid = Some(get_public_key_id(State(state.clone())));
-
-    let token = encode(
-        &header,
-        &user_claim,
-        &EncodingKey::from_rsa_pem(&state.jwt_private_key.as_bytes()).unwrap(),
-    )
-    .unwrap();
-
-    // Generate and persist new refresh token
-    let new_refresh_token = match generate_persist_refresh_token(&state, user_id).await {
+    let refresh_token = match generate_persist_refresh_token(&state, user.id).await {
         Ok(value) => value,
         Err(value) => return value,
     };
-
-    // Update token in cache
-    cache_token_id(&state, &user_key_clone, &jti_clone).await?;
-
-    // Return the new tokens
-    Ok((
-        StatusCode::OK,
-        Json(TokenResponse {
-            access_token: token,
-            refresh_token: new_refresh_token,
-            token_type: "Bearer".to_string(),
-            expires_in: state.jwt_expiration as i64,
-        }),
-    )
-        .into_response())
+    generate_access_token(&state, pg_pool, user, &refresh_token).await
 }
 
 /// Returns the JSON Web Key Set (JWKS) containing the public key for JWT token validation.
@@ -1038,7 +1063,7 @@ pub async fn reset_password(
 
 /**
 * Registration Flow:
-* 1. User provides email address only.
+* 1. User provides email address, first name, last name only.
 * 2. If the email exists, then return the existing user ID as `exclude_credentials` and send the response.
 * 3. If the email does not exist, generate a new user ID and store it in the database.
 * 4. Generate a passkey registration challenge and store it in cache with a TTL.
@@ -1055,12 +1080,12 @@ pub async fn reset_password(
 // Display name will be the first name + last name with space in between.
 pub async fn start_registration(
     State(state): State<Arc<AppState>>,
-    Json(passkey_registration_start_request): Json<PasskeyRegistrationStartRequest>,
+    Json(passkey_registration_request): Json<PasskeyRegistrationRequest>,
 ) -> Result<Response, AppError> {
     let user_id = "testuser";
     let display_name = format!(
         "{} {}",
-        passkey_registration_start_request.first_name, passkey_registration_start_request.last_name
+        passkey_registration_request.first_name, passkey_registration_request.last_name
     );
     let user_passkey_id = Uuid::new_v4();
 

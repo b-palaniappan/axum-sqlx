@@ -16,6 +16,7 @@ use axum::{Json, Router};
 use sqlx::types::chrono::Utc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
 use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
@@ -121,6 +122,10 @@ async fn main() {
         // allow requests from localhost only.
         .allow_origin("http://localhost:3000".parse::<HeaderValue>().unwrap());
 
+    // Path to assets directory
+    let assets_path = std::env::current_dir().unwrap().join("assets");
+    info!("Serving static files from: {:?}", assets_path);
+
     // build our application with a route
     let app = Router::new()
         .nest("/welcome", welcome_routes())
@@ -129,6 +134,18 @@ async fn main() {
         .nest("/cache", cache_routes())
         .nest("/passkey", passkey_auth_routes())
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
+        // Serve static files
+        .nest_service(
+            "/js",
+            ServeDir::new(assets_path.join("js")).precompressed_zstd(),
+        )
+        .route_service(
+            "/",
+            ServeDir::new(assets_path.clone())
+                .append_index_html_on_directories(true)
+                .precompressed_zstd(),
+        )
+        // Handle routes that are not found - apply after static files so they take precedence
         .fallback(page_not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .with_state(shared_state)
@@ -143,7 +160,7 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-// -- ---------------------
+// -- ---------------------r
 // -- Error Handlers
 // -- ---------------------
 async fn page_not_found() -> Response {

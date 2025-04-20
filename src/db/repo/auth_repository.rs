@@ -35,6 +35,55 @@ pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Users, sqlx
     Ok(user)
 }
 
+/// Retrieves an active user by their email address from the database.
+///
+/// This function queries the `users` table to find a user whose email matches the provided
+/// email address (case-insensitive) and whose `deleted_at` field is `NULL`, indicating that
+/// the user is active.
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool (`PgPool`).
+/// * `email` - A string slice representing the email address of the user to retrieve.
+///
+/// # Returns
+///
+/// * `Result<Option<Users>, sqlx::Error>` - On success, returns an `Option` containing a `Users` struct
+///   if an active user is found, or `None` if no active user exists with the given email address.
+///   On failure, returns a `sqlx::Error`.
+///
+/// # Errors
+///
+/// This function will return an error if the query fails for any reason.
+///
+/// # Examples
+///
+/// ```rust
+/// let user = get_active_user_by_email(&pool, "example@example.com").await?;
+/// if let Some(user) = user {
+///     println!("Found active user: {:?}", user);
+/// } else {
+///     println!("No active user found with the given email.");
+/// }
+/// ```
+pub async fn get_active_user_by_email(
+    pool: &PgPool,
+    email: &str,
+) -> Result<Option<Users>, sqlx::Error> {
+    let user = sqlx::query_as!(
+        Users,
+        r#"
+        SELECT id, key, first_name, last_name, email, email_verified, account_status as "account_status: AccountStatus",
+               last_login, failed_login_attempts, created_at, updated_at, deleted_at
+        FROM users WHERE lower(email) = lower($1) and deleted_at IS NULL
+        "#,
+        email
+    )
+        .fetch_optional(pool)
+        .await?;
+    Ok(user)
+}
+
 /// Retrieves a user by their ID from the database.
 ///
 /// # Arguments

@@ -29,8 +29,8 @@ pub async fn create_user(
     pg_pool: &PgPool,
     user_key: String,
     first_name: Option<String>,
-    last_name: &str,
-    email: &str,
+    last_name: Option<String>,
+    email: &String,
 ) -> Result<Users, Error> {
     sqlx::query_as!(
         Users,

@@ -59,7 +59,7 @@ pub async fn initialize_app_state() -> Arc<AppState> {
 
     // Setup Webauthn.
     let rp_id = "localhost";
-    let rp_origin = Url::parse("http://localhost:8080").expect("Invalid URL");
+    let rp_origin = Url::parse("http://localhost:3000").expect("Invalid URL");
     let builder = WebauthnBuilder::new(rp_id, &rp_origin).expect("Invalid configuration");
     let webauthn = builder
         .rp_name("Axum SQLx application")

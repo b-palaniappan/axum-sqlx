@@ -1,6 +1,6 @@
 use crate::cache::valkey_cache;
 use crate::config::app_config::AppState;
-use crate::error::error_model::{AppError, ErrorType, ApiError};
+use crate::error::error_model::{ApiError, AppError, ErrorType};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -204,11 +204,7 @@ async fn cache_delete(
 #[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct CacheDataRequest {
-    #[validate(length(
-        min = 21,
-        max = 21,
-        message = "ID must be 21 characters"
-    ))]
+    #[validate(length(min = 21, max = 21, message = "ID must be 21 characters"))]
     #[schema(example = "dd48ennqEdUNsklxbXvAY")]
     pub id: String,
 

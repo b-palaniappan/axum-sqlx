@@ -19,7 +19,7 @@ pub struct UserRequest {
         message = "Last name must be between 2 and 50 characters"
     ))]
     #[schema(example = "Doe")]
-    pub last_name: String,
+    pub last_name: Option<String>,
     #[validate(length(
         min = 12,
         max = 255,
@@ -65,7 +65,7 @@ pub struct StoredUser {
     #[schema(example = "John")]
     pub first_name: Option<String>,
     #[schema(example = "Doe")]
-    pub last_name: String,
+    pub last_name: Option<String>,
     #[schema(example = "me@example.com")]
     pub email: String,
 }

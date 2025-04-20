@@ -11,7 +11,7 @@ CREATE TABLE users
     id                    BIGSERIAL PRIMARY KEY,
     key                   char(21) UNIQUE                                    NOT NULL,
     first_name            VARCHAR(255),
-    last_name             VARCHAR(255)                                       NOT NULL,
+    last_name             VARCHAR(255),
     email                 VARCHAR(255) UNIQUE                                NOT NULL,
     email_verified        BOOLEAN                  DEFAULT FALSE,
     account_status        account_status                                     NOT NULL DEFAULT 'ACTIVE',
@@ -55,8 +55,6 @@ CREATE TABLE passkey_credentials
     deleted_at      TIMESTAMP WITH TIME ZONE,
     UNIQUE (credential_id)
 );
-
-CREATE INDEX idx_credentials_user_id ON passkey_credentials (user_id);
 
 -- Password Reset Tokens Table:
 CREATE TABLE password_reset_tokens

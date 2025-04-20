@@ -3,17 +3,19 @@ use crate::config::app_config::AppState;
 use crate::error::error_model::{ApiError, AppError};
 use crate::service::auth_service;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::routing::post;
 use axum::{Json, Router};
 use std::sync::Arc;
-use webauthn_rs::prelude::CreationChallengeResponse;
+use webauthn_rs::prelude::RegisterPublicKeyCredential;
 
 pub fn passkey_auth_routes() -> Router<Arc<AppState>> {
-    Router::new().route("/reg_start", post(registration_start_handler))
-    // .route("/reg_finish", post(registration_finish_handler))
-    // .route("/auth_start", post(authentication_start_handler))
-    // .route("/auth_finish", post(authentication_finish_handler))
+    Router::new()
+        .route("/register/start", post(registration_start_handler))
+        .route("/register/finish", post(registration_finish_handler))
+    // .route("/login/start", post(login_start_handler))
+    // .route("/login/finish", post(login_finish_handler))
     // .route("/logout", get(logout_handler))
 }
 
@@ -21,12 +23,13 @@ pub fn passkey_auth_routes() -> Router<Arc<AppState>> {
 ///
 /// This endpoint initiates the WebAuthn registration process for a user.
 /// It returns a challenge that the client needs to complete the registration.
+/// TODO: fix the utoipa responses struct.
 #[utoipa::path(
     post,
     path = "/api/passkeys/reg_start",
     request_body = PasskeyRegistrationRequest,
     responses(
-        (status = 200, description = "Registration challenge created successfully", body = CreationChallengeResponse),
+        (status = 200, description = "Registration challenge created successfully", body = ()),
         (status = 400, description = "Invalid request data", body = ApiError),
         (status = 500, description = "Internal server error", body = ApiError),
     ),
@@ -40,21 +43,28 @@ async fn registration_start_handler(
     auth_service::start_registration(State(state), Json(passkey_registration_request)).await
 }
 
-// async fn registration_finish_handler(
-//     State(state): State<Arc<AppState>>,
-// ) -> Result<Response, AppError> {
-//     // Call service method.
-//     auth_service::registration_finish(State(state)).await
-// }
-//
-// async fn authentication_start_handler(
+async fn registration_finish_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(public_key_credential): Json<RegisterPublicKeyCredential>,
+) -> Result<Response, AppError> {
+    // Call service method.
+    let request_id = headers
+        .get("X-Request-ID")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    auth_service::finish_registration(State(state), request_id, Json(public_key_credential)).await
+}
+
+// async fn login_start_handler(
 //     State(state): State<Arc<AppState>>,
 // ) -> Result<Response, AppError> {
 //     // Call service method.
 //     auth_service::authentication_start(State(state)).await
 // }
 //
-// async fn authentication_finish_handler(
+// async fn login_finish_handler(
 //     State(state): State<Arc<AppState>>,
 // ) -> Result<Response, AppError> {
 //     // Call service method.

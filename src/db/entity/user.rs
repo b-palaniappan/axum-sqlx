@@ -7,7 +7,7 @@ pub struct Users {
     pub id: i64,
     pub key: String,
     pub first_name: Option<String>,
-    pub last_name: String,
+    pub last_name: Option<String>,
     pub email: String,
     pub email_verified: Option<bool>,
     pub account_status: AccountStatus,

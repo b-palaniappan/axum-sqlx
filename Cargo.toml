@@ -20,8 +20,9 @@ axum = { version = "^0" }
 # Tower dependencies
 tower-http = { version = "^0", features = [
   "cors",
-  "compression-full",
+  "compression-zstd",
   "timeout",
+  "fs",
 ] }
 
 # JSON parser
@@ -56,7 +57,7 @@ tracing-subscriber = { version = "^0", features = ["env-filter"] }
 
 # Validation
 validator = { version = "^0", features = ["derive"] }
-derive_more = { version ="^1", features = ["display", "error"] }
+derive_more = { version ="^2", features = ["display", "error"] }
 
 # OpenAPI / Swagger UI.
 utoipa = { version = "^5", features = ["axum_extras", "chrono"] }

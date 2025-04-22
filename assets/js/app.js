@@ -67,11 +67,20 @@ function login() {
     return;
   }
 
-  fetch('http://localhost:3000/passkey/login/start' + encodeURIComponent(username), {
-    method: 'POST'
+  fetch('http://localhost:3000/passkey/login/start', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      email: username,
+      type: "passkey",
+    })
   })
     .then(response => response.json())
     .then((credentialRequestOptions) => {
+      window.requestId = credentialRequestOptions.requestId;
+
       credentialRequestOptions.publicKey.challenge = Base64.toUint8Array(credentialRequestOptions.publicKey.challenge);
       credentialRequestOptions.publicKey.allowCredentials?.forEach(function (listItem) {
         listItem.id = Base64.toUint8Array(listItem.id)
@@ -85,7 +94,8 @@ function login() {
       fetch('http://localhost:3000/passkey/login/finish', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'X-Request-ID': window.requestId,
         },
         body: JSON.stringify({
           id: assertion.id,

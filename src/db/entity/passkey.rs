@@ -3,6 +3,7 @@ use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::FromRow;
 use webauthn_rs::prelude::{CredentialID, Passkey};
 
+/// Represents a passkey credential associated with a user.
 #[derive(Debug, FromRow)]
 #[allow(dead_code)]
 pub struct PasskeyCredential {

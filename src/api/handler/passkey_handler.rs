@@ -1,4 +1,4 @@
-use crate::api::model::auth::PasskeyRegistrationRequest;
+use crate::api::model::auth::{PasskeyAuthenticationRequest, PasskeyRegistrationRequest};
 use crate::config::app_config::AppState;
 use crate::error::error_model::{ApiError, AppError};
 use crate::service::auth_service;
@@ -8,14 +8,14 @@ use axum::response::Response;
 use axum::routing::post;
 use axum::{Json, Router};
 use std::sync::Arc;
-use webauthn_rs::prelude::RegisterPublicKeyCredential;
+use webauthn_rs::prelude::{PublicKeyCredential, RegisterPublicKeyCredential};
 
 pub fn passkey_auth_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/register/start", post(registration_start_handler))
         .route("/register/finish", post(registration_finish_handler))
-    // .route("/login/start", post(login_start_handler))
-    // .route("/login/finish", post(login_finish_handler))
+        .route("/login/start", post(login_start_handler))
+        .route("/login/finish", post(login_finish_handler))
     // .route("/logout", get(logout_handler))
 }
 
@@ -48,29 +48,38 @@ async fn registration_finish_handler(
     headers: HeaderMap,
     Json(public_key_credential): Json<RegisterPublicKeyCredential>,
 ) -> Result<Response, AppError> {
-    // Call service method.
     let request_id = headers
         .get("X-Request-ID")
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default()
         .to_string();
+    // Call service method.
     auth_service::finish_registration(State(state), request_id, Json(public_key_credential)).await
 }
 
-// async fn login_start_handler(
-//     State(state): State<Arc<AppState>>,
-// ) -> Result<Response, AppError> {
-//     // Call service method.
-//     auth_service::authentication_start(State(state)).await
-// }
-//
-// async fn login_finish_handler(
-//     State(state): State<Arc<AppState>>,
-// ) -> Result<Response, AppError> {
-//     // Call service method.
-//     auth_service::authentication_finish(State(state)).await
-// }
-//
+async fn login_start_handler(
+    State(state): State<Arc<AppState>>,
+    Json(passkey_authentication_request): Json<PasskeyAuthenticationRequest>,
+) -> Result<Response, AppError> {
+    // Call service method.
+    auth_service::start_authentication(State(state), Json(passkey_authentication_request)).await
+}
+
+async fn login_finish_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(passkey_finish_auth_request): Json<PublicKeyCredential>,
+) -> Result<Response, AppError> {
+    let request_id = headers
+        .get("X-Request-ID")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    // Call service method.
+    auth_service::finish_authentication(State(state), request_id, Json(passkey_finish_auth_request))
+        .await
+}
+
 // async fn logout_handler(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
 //     // Call service method.
 //     auth_service::logout(State(state)).await

@@ -137,4 +137,20 @@ pub struct PasskeyRegistrationRequest {
     #[validate(email(message = "Invalid email address"))]
     #[schema(example = "me@example.com")]
     pub email: String,
+
+    #[serde(rename = "type")]
+    #[schema(example = "passkey")]
+    pub registration_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PasskeyAuthenticationRequest {
+    #[validate(email(message = "Invalid email address"))]
+    #[schema(example = "me@example.com")]
+    pub email: String,
+
+    #[serde(rename = "type")]
+    #[schema(example = "passkey")]
+    pub login_type: String,
 }

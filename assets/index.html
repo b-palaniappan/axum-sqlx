@@ -8,10 +8,13 @@
   <script src="./js/app.js" defer></script>
   <style>
       :root {
-          --primary-color: #4a6cf7;
-          --accent-color: #ff6b6b;
-          --bg-color: #f8f9fa;
-          --text-color: #333;
+          --primary-color: #5d7eff;
+          --accent-color: #ff7b7b;
+          --bg-color: #1e1e2e;
+          --card-bg-color: #282838;
+          --text-color: #e0e0e0;
+          --input-bg-color: #353545;
+          --input-border-color: #444454;
           --border-radius: 6px;
       }
 
@@ -33,9 +36,9 @@
           width: 100%;
           max-width: 500px;
           padding: 2rem;
-          background-color: white;
+          background-color: var(--card-bg-color);
           border-radius: var(--border-radius);
-          box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+          box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
       }
 
       h1 {
@@ -57,11 +60,18 @@
       input {
           width: 100%;
           padding: 0.75rem;
-          border: 1px solid #ddd;
+          border: 1px solid var(--input-border-color);
+          background-color: var(--input-bg-color);
+          color: var(--text-color);
           border-radius: var(--border-radius);
           font-size: 1rem;
           margin-bottom: 1rem;
           box-sizing: border-box;
+      }
+
+      input:focus {
+          outline: 2px solid var(--primary-color);
+          border-color: var(--primary-color);
       }
 
       .button-group {
@@ -82,7 +92,8 @@
       }
 
       button:hover {
-          background-color: #3a5cd8;
+          background-color: #4a6ae8;
+          box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
       }
 
       button:last-child {
@@ -90,7 +101,7 @@
       }
 
       button:last-child:hover {
-          background-color: #e55b5b;
+          background-color: #f66a6a;
       }
 
       #flash_message {
@@ -102,18 +113,18 @@
       }
 
       .success {
-          background-color: #d4edda;
-          color: #155724;
+          background-color: #264c36;
+          color: #7ce0a3;
       }
 
       .info {
-          background-color: #cce5ff;
-          color: #004085;
+          background-color: #26405e;
+          color: #90ceff;
       }
 
       .error {
-          background-color: #f8d7da;
-          color: #721c24;
+          background-color: #4c2626;
+          color: #ff9e9e;
       }
   </style>
 </head>

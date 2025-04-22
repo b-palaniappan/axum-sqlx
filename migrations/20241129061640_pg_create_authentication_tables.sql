@@ -45,15 +45,12 @@ CREATE UNIQUE INDEX idx_one_active_credential_per_user ON user_login_credentials
 
 CREATE TABLE passkey_credentials
 (
-    id              BIGSERIAL PRIMARY KEY,
-    user_id         BIGINT      NOT NULL REFERENCES users (id),
-    credential_id   BYTEA       NOT NULL,
-    public_key      BYTEA       NOT NULL,
-    counter         INTEGER     NOT NULL     DEFAULT 0,
-    credential_type VARCHAR(32) NOT NULL, -- Not sure the use of this.
-    created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    deleted_at      TIMESTAMP WITH TIME ZONE,
-    UNIQUE (credential_id)
+    id                 BIGSERIAL PRIMARY KEY,
+    user_id            BIGINT                                             NOT NULL REFERENCES users (id),
+    passkey_credential JSONB                                              NOT NULL,
+    created_at         TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at         TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    deleted_at         TIMESTAMP WITH TIME ZONE
 );
 
 -- Password Reset Tokens Table:

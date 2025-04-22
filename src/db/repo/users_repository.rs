@@ -27,7 +27,7 @@ use sqlx::PgPool;
 /// * There is an issue executing the SQL query.
 pub async fn create_user(
     pg_pool: &PgPool,
-    user_key: String,
+    user_key: &String,
     first_name: Option<String>,
     last_name: Option<String>,
     email: &String,

@@ -100,7 +100,7 @@ async fn create_user(
 
     let result = users_repository::create_user(
         &state.pg_pool,
-        user_key,
+        &user_key,
         user_request.first_name,
         user_request.last_name,
         &user_request.email,

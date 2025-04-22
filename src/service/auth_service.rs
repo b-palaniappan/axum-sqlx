@@ -54,7 +54,7 @@ use std::time::Duration;
 use tracing::{error, info};
 use uuid::Uuid;
 use validator::Validate;
-use webauthn_rs::prelude::{CredentialID, RegisterPublicKeyCredential};
+use webauthn_rs::prelude::{CredentialID, PasskeyRegistration, RegisterPublicKeyCredential};
 use xxhash_rust::xxh3::xxh3_64;
 
 /// Validates a JWT token using the public key.
@@ -1089,6 +1089,7 @@ pub async fn start_registration(
     let user_id = &passkey_registration_request.email;
     let display_name = &passkey_registration_request.email;
     let user_passkey_id = Uuid::new_v4(); // Unique passkey ID for the user.
+    let user_key = nanoid!();
 
     let user_opt = auth_repository::get_active_user_by_email(
         &state.pg_pool,
@@ -1097,7 +1098,6 @@ pub async fn start_registration(
     .await;
     let exclude_credentials = match user_opt {
         Ok(Some(user)) => {
-            // TODO: Get exclude_credentials from DB.. Which are existing credentials ids for the users.
             info!("User already exists.");
             let passkey_credentials =
                 passkey_credentials_repository::get_passkey_credentials_by_user_id(
@@ -1107,11 +1107,11 @@ pub async fn start_registration(
                 .await;
             match passkey_credentials {
                 Ok(credentials) => {
-                    // Convert Vec<Vec<u8>> to Vec<CredentialID>
+                    // Convert to Vec<CredentialID>
                     Some(
                         credentials
                             .iter()
-                            .map(|cred| CredentialID::from(cred.credential_id.clone()))
+                            .filter_map(|cred| cred.get_credential_id())
                             .collect::<Vec<CredentialID>>(),
                     )
                 }
@@ -1127,7 +1127,7 @@ pub async fn start_registration(
         Ok(None) => {
             let saved_user = users_repository::create_user(
                 &state.pg_pool,
-                nanoid!(),
+                &user_key,
                 None,
                 None,
                 &passkey_registration_request.email,
@@ -1155,7 +1155,7 @@ pub async fn start_registration(
             valkey_cache::set_object_with_ttl(
                 State(state.clone()),
                 &registration_request_id,
-                &reg_state,
+                &(&user_key, &reg_state),
                 Duration::from_secs(15 * 60).as_secs(),
             )
             .await
@@ -1189,50 +1189,63 @@ pub async fn finish_registration(
     request_id: String,
     Json(public_key_credential): Json<RegisterPublicKeyCredential>,
 ) -> Result<Response, AppError> {
-    let reg_state = match valkey_cache::get_object(State(state.clone()), &request_id).await {
-        Ok(Some(reg_state)) => reg_state,
-        Ok(None) => {
-            error!("Passkey Registration state not found in cache.");
-            return Err(AppError::new(
-                ErrorType::BadRequest,
-                "Passkey Registration state not found in cache.",
-            ));
-        }
-        Err(e) => {
-            error!("Error getting Passkey Registration from cache: {:?}", e);
-            return Err(AppError::new(
+    let (user_key, reg_state): (String, PasskeyRegistration) =
+        match valkey_cache::get_object(State(state.clone()), &request_id).await {
+            Ok(Some(cached_data)) => cached_data,
+            Ok(None) => {
+                error!("Passkey Registration state not found in cache.");
+                return Err(AppError::new(
+                    ErrorType::BadRequest,
+                    "Passkey Registration state not found or expired.",
+                ));
+            }
+            Err(e) => {
+                error!("Error getting Passkey Registration from cache: {:?}", e);
+                return Err(AppError::new(
+                    ErrorType::InternalServerError,
+                    "Something went wrong. Please try again later.",
+                ));
+            }
+        };
+    let user = users_repository::get_user_by_key(&state.pg_pool, &user_key)
+        .await
+        .map_err(|e| {
+            error!("Error getting user by key: {:?}", e);
+            AppError::new(
                 ErrorType::InternalServerError,
                 "Something went wrong. Please try again later.",
-            ));
-        }
-    };
+            )
+        })?;
+    let user_id = user.id;
 
-    let res = match state
+    match state
         .webauthn
         .finish_passkey_registration(&public_key_credential, &reg_state)
     {
         Ok(passkey) => {
             // Store the passkey in the database
-            // match passkey_credentials_repository::store_user_passkey(&state.pg_pool, &user_passkey_id, &passkey)
-            //     .await
-            // {
-            //     Ok(_) => {
-            //         // Clean up the registration state from cache
-            //         let _ =
-            //             valkey_cache::delete_object(State(state.clone()), &user_passkey_id).await;
-            //         StatusCode::NO_CONTENT.into_response()
-            //     }
-            //     Err(e) => {
-            //         error!("Error storing passkey: {:?}", e);
-            //         return Err(AppError::new(
-            //             ErrorType::InternalServerError,
-            //             "Failed to complete registration. Please try again later.",
-            //         ));
-            //     }
-            // }
-            info!("Passkey registration successful!!");
-            // TODO: Generate access token and refresh token for the user.
-            return Ok((StatusCode::NO_CONTENT,).into_response());
+            match passkey_credentials_repository::create_passkey_credential(
+                &state.pg_pool,
+                &user_id,
+                &passkey,
+            )
+            .await
+            {
+                Ok(_) => {
+                    // Clean up the registration state from cache
+                    let _ = valkey_cache::delete_object(State(state.clone()), &request_id).await;
+                    info!("Passkey registration successful!!");
+                    // TODO: Generate access token and refresh token for the user.
+                    return Ok((StatusCode::NO_CONTENT,).into_response());
+                }
+                Err(e) => {
+                    error!("Error storing passkey: {:?}", e);
+                    return Err(AppError::new(
+                        ErrorType::InternalServerError,
+                        "Failed to complete registration. Please try again later.",
+                    ));
+                }
+            }
         }
         Err(e) => {
             error!("Error finishing passkey registration: {:?}", e);
@@ -1241,6 +1254,5 @@ pub async fn finish_registration(
                 "Failed to complete registration. Please try again later.",
             ));
         }
-    };
-    Ok(res)
+    }
 }

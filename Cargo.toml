@@ -48,6 +48,7 @@ webauthn-rs = { version = "^0", features = ["danger-allow-state-serialisation"]}
 openssl = "^0"
 xxhash-rust = { version = "^0", features = ["xxh3"] } # Extremely fast non-cryptographic hash algorithm
 aes-gcm = "^0" # AES-GCM authenticated encryption
+rand_chacha = "^0" # Secure Random number generator
 
 # Async
 tokio = { version = "^1.0", features = ["macros", "rt-multi-thread"] }

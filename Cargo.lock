@@ -262,6 +262,7 @@ dependencies = [
  "jsonwebtoken",
  "nanoid",
  "openssl",
+ "rand_chacha",
  "serde",
  "serde_json",
  "sha2",

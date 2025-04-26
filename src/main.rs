@@ -5,6 +5,7 @@ use std::time::Duration;
 use crate::api::handler::auth_handler::auth_routes;
 use crate::api::handler::cache_handler::cache_routes;
 use crate::api::handler::passkey_handler::passkey_auth_routes;
+use crate::api::handler::totp_handler::totp_routes;
 use crate::api::handler::user_handler::user_routes;
 use crate::api::handler::welcome_handler::welcome_routes;
 use crate::config::app_config::{get_server_address, initialize_app_state, AppState};
@@ -133,6 +134,7 @@ async fn main() {
         .nest("/users", user_routes())
         .nest("/cache", cache_routes())
         .nest("/passkey", passkey_auth_routes())
+        .nest("/mfa/totp", totp_routes())
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         // Serve static files
         .nest_service(

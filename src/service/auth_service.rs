@@ -6,8 +6,6 @@
 // Reset password - Implemented.
 // Change password.
 // Logout - Work in progress
-// TOTP
-// TOTP QR Code.
 // JWT or Auth Token based logged in.
 // Email verification
 // Phone verification - using SMS
@@ -127,7 +125,7 @@ pub async fn validate_token(
                     })?;
 
             match cached_jwt {
-                Some(jwt) if jwt.value == token_data.claims.jti => {
+                Some(jwt) if jwt.jti == token_data.claims.jti => {
                     Ok((StatusCode::OK, Json(token_data.claims)).into_response())
                 }
                 _ => Err(AppError::new(
@@ -480,7 +478,7 @@ async fn cache_token_id(
             )
         })?;
     if let Some(cached_user_key) = cached_user_key {
-        if !cached_user_key.value.is_empty() {
+        if !cached_user_key.jti.is_empty() {
             valkey_cache::delete_object(State(state.clone()), &user_key)
                 .await
                 .map_err(|e| {
@@ -498,7 +496,7 @@ async fn cache_token_id(
         State(state.clone()),
         &user_key,
         &JwtId {
-            value: jti_clone.clone(),
+            jti: jti_clone.clone(),
         },
         Duration::from_secs(state.jwt_expiration.clone()).as_secs(),
     )
@@ -833,10 +831,10 @@ struct Claims {
 ///
 /// # Fields
 ///
-/// * `value` - A string containing the unique identifier of the JWT token.
+/// * `jti` - A string containing the unique identifier of the JWT token.
 #[derive(Debug, Serialize, Deserialize)]
 struct JwtId {
-    value: String,
+    jti: String,
 }
 
 /// Handles the forgot password request by generating a reset token and sending an email.
@@ -1235,14 +1233,14 @@ pub async fn finish_registration(
                     // Clean up the registration state from cache
                     let _ = valkey_cache::delete_object(State(state.clone()), &request_id).await;
                     info!("Passkey registration successful!!");
-                    return Ok((StatusCode::NO_CONTENT,).into_response());
+                    Ok((StatusCode::NO_CONTENT,).into_response())
                 }
                 Err(e) => {
                     error!("Error storing passkey: {:?}", e);
-                    return Err(AppError::new(
+                    Err(AppError::new(
                         ErrorType::InternalServerError,
                         "Failed to complete registration. Please try again later.",
-                    ));
+                    ))
                 }
             }
         }
@@ -1384,6 +1382,9 @@ pub async fn finish_authentication(
                     )
                 })?;
             let user_id = user.id;
+
+            // Cleanup the cache after successful authentication
+            let _ = valkey_cache::delete_object(State(state.clone()), &request_id).await;
 
             // Generate and persist a new refresh token for the user
             let refresh_token = match generate_persist_refresh_token(&state, user_id).await {

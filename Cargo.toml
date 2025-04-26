@@ -43,10 +43,11 @@ argon2 = "^0"
 jsonwebtoken = "^9"
 hmac = "^0"
 sha2 = "^0"
-totp-rs = { version = "^5", features = ["qr"] }   # for TOTP 2FA
+totp-rs = { version = "^5", features = ["qr", "otpauth"] }   # for TOTP 2FA
 webauthn-rs = { version = "^0", features = ["danger-allow-state-serialisation"]}  # for passkey based authentication.
 openssl = "^0"
 xxhash-rust = { version = "^0", features = ["xxh3"] } # Extremely fast non-cryptographic hash algorithm
+aes-gcm = "^0" # AES-GCM authenticated encryption
 
 # Async
 tokio = { version = "^1.0", features = ["macros", "rt-multi-thread"] }
@@ -64,7 +65,6 @@ utoipa = { version = "^5", features = ["axum_extras", "chrono"] }
 utoipa-scalar = { version = "^0", features = ["axum"] }
 
 # Caching
-redis = { version = "^0", features = ["tokio-comp"] }
 bb8-redis = "^0"
 
 # Utils

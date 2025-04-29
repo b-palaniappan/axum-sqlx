@@ -70,7 +70,7 @@ CREATE TABLE password_reset_tokens
 CREATE INDEX idx_password_reset_tokens_token ON password_reset_tokens (token) WHERE is_valid = TRUE;
 
 -- Two-Factor Authentication Table
-CREATE TABLE user_2fa_methods
+CREATE TABLE user_mfa_methods
 (
     id           BIGSERIAL PRIMARY KEY,
     user_id      BIGINT            NOT NULL REFERENCES users (id),
@@ -82,7 +82,7 @@ CREATE TABLE user_2fa_methods
     UNIQUE (user_id, method)
 );
 
-CREATE TABLE user_2fa_email
+CREATE TABLE user_mfa_email
 (
     id         BIGSERIAL PRIMARY KEY,
     user_id    BIGINT       NOT NULL REFERENCES users (id),
@@ -93,7 +93,7 @@ CREATE TABLE user_2fa_email
     UNIQUE (user_id, email)
 );
 
-CREATE TABLE user_2fa_sms
+CREATE TABLE user_mfa_sms
 (
     id           BIGSERIAL PRIMARY KEY,
     user_id      BIGINT      NOT NULL REFERENCES users (id),
@@ -104,13 +104,13 @@ CREATE TABLE user_2fa_sms
     UNIQUE (user_id, phone_number)
 );
 
-CREATE TABLE user_2fa_totp
+CREATE TABLE user_mfa_totp
 (
     id          BIGSERIAL PRIMARY KEY,
     user_id     BIGINT NOT NULL REFERENCES users (id),
     totp_secret JSONB  NOT NULL,
-    created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
     deleted_at  TIMESTAMP WITH TIME ZONE,
     UNIQUE (user_id)
 );
@@ -121,7 +121,7 @@ CREATE TABLE two_factor_backups
     user_id     BIGINT      NOT NULL REFERENCES users (id),
     backup_code VARCHAR(20) NOT NULL,
     used_at     TIMESTAMP WITH TIME ZONE,
-    created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
     CONSTRAINT unique_backup_codes UNIQUE (user_id, backup_code)
 );
 

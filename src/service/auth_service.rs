@@ -28,7 +28,7 @@ use crate::service::email;
 use crate::AppState;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
-use argon2::{Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier};
+use argon2::{Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -222,17 +222,17 @@ pub async fn authenticate_user(
                     }
                     Ok(None) => {
                         error!("User login credentials not found for user ID: {}", user.id);
-                        return Err(AppError::new(
+                        Err(AppError::new(
                             ErrorType::UnauthorizedError,
                             "Invalid credentials. Check email and password.",
-                        ));
+                        ))
                     }
                     Err(e) => {
                         error!("Error getting user login credentials: {:?}", e);
-                        return Err(AppError::new(
+                        Err(AppError::new(
                             ErrorType::InternalServerError,
                             "Something went wrong. Please try again later.",
-                        ));
+                        ))
                     }
                 }
             } else {
@@ -266,7 +266,14 @@ pub async fn authenticate_user(
 /// This function will always return an `AppError` with the message "Invalid credentials. Check email and password."
 /// to simulate a failed authentication attempt.
 async fn run_fake_password_hash_check(state: Arc<AppState>) -> Result<Response, AppError> {
-    let argon2 = Argon2::default();
+    // let argon2 = Argon2::default();
+    let argon2 = Argon2::new_with_secret(
+        &state.argon_pepper.as_bytes(),
+        argon2::Algorithm::Argon2id,
+        Version::V0x13,
+        Params::default(),
+    )
+    .unwrap();
 
     // Trigger a fake check to avoid returning immediately.
     // Which can be used by hacker to figure out user id is not valid.
@@ -315,8 +322,15 @@ async fn verify_password_hash_hmac(
 ) -> Result<(), AppError> {
     let pg_pool = &state.pg_pool;
     let parsed_hash = PasswordHash::new(password_hash).unwrap();
+    let argon2 = Argon2::new_with_secret(
+        &state.argon_pepper.as_bytes(),
+        argon2::Algorithm::Argon2id,
+        Version::V0x13,
+        Params::default(),
+    )
+    .unwrap();
 
-    if Argon2::default()
+    if argon2
         .verify_password(user_auth_request.password.as_bytes(), &parsed_hash)
         .is_err()
     {
@@ -1002,7 +1016,13 @@ pub async fn reset_password(
 
     // Step 3: Hash the new password with Argon2
     let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
+    let argon2 = Argon2::new_with_secret(
+        &state.argon_pepper.as_bytes(),
+        argon2::Algorithm::Argon2id,
+        Version::V0x13,
+        Params::default(),
+    )
+    .unwrap();
     let password_hash = argon2
         .hash_password_customized(
             new_password.as_bytes(),

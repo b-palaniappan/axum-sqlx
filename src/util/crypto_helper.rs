@@ -143,7 +143,7 @@ pub async fn aes_gcm_decrypt(
 ///     println!("{}", code);
 /// }
 /// ```
-async fn generate_backup_codes(size: usize, length: usize) -> Vec<String> {
+pub async fn generate_backup_codes(size: usize, length: usize) -> Vec<String> {
     let alphabet: [char; 52] = [
         'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'M', 'N', 'P', 'R', 'S', 'T', 'U', 'V',
         'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'j', 'k', 'm', 'n', 'p', 'r',

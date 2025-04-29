@@ -28,12 +28,12 @@ openssl rsa -in axum_private.pem -pubout -out axum_public.pem
 - [x] Argon2id password hashing algorithm.
 - [x] Add openapi / Swagger UI documentation.
 - [ ] JWT token based authentication and authorization.
-- [ ] Add caching with Redis.
-- [ ] Add logging using tracing.
+- [x] Add caching with Redis.
+- [x] Add logging using tracing.
 - [ ] Add secret manager to store secrets.
-- [ ] Rest api client using reqwest.
+- [x] Rest api client using reqwest.
 - [ ] Unit and Integration testing.
-- [ ] Dockerize the application.
+- [x] Dockerize the application.
 - [ ] CI/CD pipeline using GitHub Actions.
 
 ## Caching

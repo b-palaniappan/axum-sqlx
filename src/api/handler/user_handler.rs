@@ -6,7 +6,7 @@ use crate::db::repo::{user_login_credentials_repository, users_repository};
 use crate::error::error_model::{ApiError, AppError, ErrorType};
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
-use argon2::{Algorithm, Argon2, Params, PasswordHasher};
+use argon2::{Algorithm, Argon2, Params, PasswordHasher, Version};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -74,7 +74,14 @@ async fn create_user(
 
     // Hash password using Argon2.
     let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
+    let argon2 = Argon2::new_with_secret(
+        &state.argon_pepper.as_bytes(),
+        Algorithm::Argon2id,
+        Version::V0x13,
+        Params::default(),
+    )
+    .unwrap();
+    // let argon2 = Argon2::default();
     let password_hash = argon2
         .hash_password_customized(
             user_request.password.as_bytes(),

@@ -6,7 +6,7 @@ use sqlx::FromRow;
 /// Represents totp credentials associated with a user Multi-factor authentication (MFA).
 #[derive(Debug, FromRow)]
 #[allow(dead_code)]
-pub struct UseMfaTotp {
+pub struct UserMfaTotp {
     pub id: i64,
     pub user_id: i64,
     pub totp_secret: JsonValue,
@@ -22,7 +22,7 @@ pub struct TotpSecret {
     pub nonce: String,
 }
 
-impl UseMfaTotp {
+impl UserMfaTotp {
     /// Converts the `totp_secret` field of the `UseMfaTotp` struct
     /// into a `TotpSecret` object.
     ///

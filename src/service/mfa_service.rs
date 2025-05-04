@@ -231,26 +231,7 @@ pub async fn generate_backup_codes(
         )
     })?;
 
-    // Get the application encryption key
-    let encryption_key = &state.encryption_key;
-
-    // Encrypt the backup codes
-    let (nonce, encrypted_codes) =
-        crypto_helper::aes_gcm_encrypt(encryption_key, codes_json.as_bytes())
-            .await
-            .map_err(|e| {
-                error!("Failed to encrypt backup codes: {:?}", e);
-                AppError::new(
-                    ErrorType::InternalServerError,
-                    "Failed to secure backup codes",
-                )
-            })?;
-
-    // Create the secret object
-    let backup_secret = TotpSecret {
-        encrypted_secret: encrypted_codes,
-        nonce,
-    };
+    // Hash the backup codes using Argon2id and store them in the database
 
     // TODO: Create a separate table for backup codes or add a type field to the existing table
 
@@ -300,7 +281,7 @@ async fn generate_totp(
 ///
 /// A `[u8; 32]` array containing the generated secret key.
 async fn generate_totp_secret() -> [u8; 32] {
-    let mut rng = ChaCha20Rng::from_entropy();
+    let mut rng = ChaCha20Rng::from_seed(Default::default());
     let mut secret = [0u8; 32];
     rng.fill_bytes(&mut secret);
     secret

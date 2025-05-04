@@ -132,3 +132,35 @@ pub async fn deactivate_totp_secret(
         }
     }
 }
+
+pub async fn save_mfa_backup_code(
+    pool: &PgPool,
+    user_id: i64,
+    backup_code_hash: String,
+    backup_code_hmac: Vec<u8>,
+) -> Result<i64, AppError> {
+    let now = Utc::now(); // Generate the current timestamp in Rust
+    match sqlx::query_scalar!(
+        r#"
+        INSERT INTO user_mfa_backup_codes (user_id, backup_code_hash, backup_code_hmac, created_at)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id
+        "#,
+        user_id,
+        backup_code_hash,
+        backup_code_hmac,
+        now
+    )
+    .fetch_one(pool)
+    .await
+    {
+        Ok(id) => Ok(id),
+        Err(e) => {
+            error!("Failed to save Backup Code: {:?}", e);
+            Err(AppError::new(
+                ErrorType::InternalServerError,
+                "Failed to save Backup code",
+            ))
+        }
+    }
+}

@@ -107,22 +107,24 @@ CREATE TABLE user_mfa_sms
 CREATE TABLE user_mfa_totp
 (
     id          BIGSERIAL PRIMARY KEY,
-    user_id     BIGINT NOT NULL REFERENCES users (id),
-    totp_secret JSONB  NOT NULL,
+    user_id     BIGINT                                             NOT NULL REFERENCES users (id),
+    totp_secret JSONB                                              NOT NULL,
     created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
     deleted_at  TIMESTAMP WITH TIME ZONE,
     UNIQUE (user_id)
 );
 
-CREATE TABLE two_factor_backups
+-- Backup codes for 2FA. A set of 10 codes per users for recovery.
+CREATE TABLE user_mfa_backup_codes
 (
-    id          BIGSERIAL PRIMARY KEY,
-    user_id     BIGINT      NOT NULL REFERENCES users (id),
-    backup_code VARCHAR(20) NOT NULL,
-    used_at     TIMESTAMP WITH TIME ZONE,
-    created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    CONSTRAINT unique_backup_codes UNIQUE (user_id, backup_code)
+    id               BIGSERIAL PRIMARY KEY,
+    user_id          BIGINT                                             NOT NULL REFERENCES users (id),
+    backup_code_hash VARCHAR(255)                                       NOT NULL,
+    backup_code_hmac BYTEA                                              NOT NULL,
+    used_at          TIMESTAMP WITH TIME ZONE,
+    created_at       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    UNIQUE (user_id)
 );
 
 -- List of `remember this device` devices after 2FA.

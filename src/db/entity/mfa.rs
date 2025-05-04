@@ -34,3 +34,16 @@ impl UserMfaTotp {
         serde_json::from_value(self.totp_secret.clone())
     }
 }
+
+/// Represents the Backup codes in case of MFA failure.
+#[derive(Debug, FromRow)]
+#[allow(dead_code)]
+pub struct UserMfaBackupCodes {
+    pub id: i64,
+    pub user_id: i64,
+    pub backup_code_hash: String,
+    pub backup_code_hmac: Vec<u8>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
+}

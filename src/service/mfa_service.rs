@@ -3,6 +3,7 @@ use crate::db::entity::mfa::TotpSecret;
 use crate::db::repo::{mfa_repository, users_repository};
 use crate::error::error_model::{AppError, ErrorType};
 use crate::util::crypto_helper;
+use crate::util::crypto_helper::hash_password_sign_with_hmac;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -208,7 +209,7 @@ pub async fn validate_totp(
 pub async fn generate_backup_codes(
     State(state): State<Arc<AppState>>,
     user_key: &String,
-) -> Result<Vec<String>, AppError> {
+) -> Result<Response, AppError> {
     // Get the user
     let user = users_repository::get_user_by_key(&state.pg_pool, user_key).await;
     let user = match user {
@@ -222,22 +223,13 @@ pub async fn generate_backup_codes(
     // Generate 10 backup codes, each 8 characters long
     let backup_codes = crypto_helper::generate_backup_codes(10, 8).await;
 
-    // Serialize the backup codes to JSON
-    let codes_json = serde_json::to_string(&backup_codes).map_err(|e| {
-        error!("Failed to serialize backup codes: {:?}", e);
-        AppError::new(
-            ErrorType::InternalServerError,
-            "Failed to process backup codes",
-        )
-    })?;
-
-    // Hash the backup codes using Argon2id and store them in the database
-
-    // TODO: Create a separate table for backup codes or add a type field to the existing table
-
     // Return the plaintext backup codes to the user
-    // The user should store these safely as they won't be retrievable in plaintext again
-    Ok(backup_codes)
+    // should store these safely as they won't be retrievable in plaintext again
+    Ok((
+        StatusCode::CREATED,
+        Json(BackupCodesResponse { backup_codes }),
+    )
+        .into_response())
 }
 
 /// Creates a TOTP instance for a user with the given secret and email.

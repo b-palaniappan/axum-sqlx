@@ -183,7 +183,7 @@ async fn get_users_handler(
     path = "/users/{key}",
     tag = "Users",
     params(
-        ("id" = String, Path, description = "Unique user id")
+        ("key" = String, Path, description = "Unique user key")
     ),
     responses(
         (status = 200, description = "User created successfully", body = StoredUser),

@@ -17,9 +17,9 @@ use tracing::{debug, error};
 /// # Returns
 ///
 /// A router with the following endpoints:
-/// - POST /register/{user_key} - Register a new TOTP device for a user
-/// - POST /validate/{user_key} - Validate a TOTP code
-/// - GET /backup-codes/{user_key} - Generate backup codes for a user
+/// - POST /register/{key} - Register a new TOTP device for a user
+/// - POST /validate/{key} - Validate a TOTP code
+/// - GET /backup-codes/{key} - Generate backup codes for a user
 ///
 /// # Example
 ///
@@ -29,9 +29,9 @@ use tracing::{debug, error};
 /// ```
 pub fn totp_routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/register/{user_key}", post(totp_register))
-        .route("/validate/{user_key}", post(totp_validate))
-        .route("/backup-codes/{user_key}", get(totp_backup_codes))
+        .route("/register/{key}", post(totp_register))
+        .route("/validate/{key}", post(totp_validate))
+        .route("/backup-codes/{key}", get(totp_backup_codes))
 }
 
 /// Register a new TOTP device for a user.
@@ -41,17 +41,17 @@ pub fn totp_routes() -> Router<Arc<AppState>> {
 ///
 /// # Path parameters
 ///
-/// * `user_key` - The unique identifier for the user
+/// * `key` - The unique identifier for the user
 ///
 /// # Returns
 ///
 /// A TOTP response containing a QR code and TOTP URL.
 #[utoipa::path(
     post,
-    path = "/mfa/totp/register/{user_key}",
+    path = "/mfa/totp/register/{key}",
     tag = "TOTP",
     params(
-        ("user_key" = String, Path, description = "User's unique key")
+        ("key" = String, Path, description = "User's unique key")
     ),
     responses(
         (status = 200, description = "TOTP successfully registered", body = TotpResponse),
@@ -59,18 +59,18 @@ pub fn totp_routes() -> Router<Arc<AppState>> {
         (status = 500, description = "Internal server error", body = ApiError)
     )
 )]
-pub async fn totp_register(
+async fn totp_register(
     State(state): State<Arc<AppState>>,
-    Path(user_key): Path<String>,
+    Path(key): Path<String>,
 ) -> Result<Response, AppError> {
-    debug!("Registering TOTP for user with key: {}", user_key);
+    debug!("Registering TOTP for user with key: {}", key);
 
     // Call the service to register the TOTP for the user
-    let result = mfa_service::register_totp(State(state), &user_key).await;
+    let result = mfa_service::register_totp(State(state), &key).await;
 
     // Log errors if they occur
     if let Err(ref e) = result {
-        error!("Failed to register TOTP for user {}: {:?}", user_key, e);
+        error!("Failed to register TOTP for user {}: {:?}", key, e);
     }
 
     // Return the result
@@ -83,7 +83,7 @@ pub async fn totp_register(
 ///
 /// # Path parameters
 ///
-/// * `user_key` - The unique identifier for the user
+/// * `key` - The unique identifier for the user
 ///
 /// # Request body
 ///
@@ -94,10 +94,10 @@ pub async fn totp_register(
 /// A JSON response indicating whether the code is valid.
 #[utoipa::path(
     post,
-    path = "/mfa/totp/validate/{user_key}",
+    path = "/mfa/totp/validate/{key}",
     tag = "TOTP",
     params(
-        ("user_key" = String, Path, description = "User's unique key")
+        ("key" = String, Path, description = "User's unique key")
     ),
     request_body = ValidateTotpRequest,
     responses(
@@ -106,21 +106,20 @@ pub async fn totp_register(
         (status = 500, description = "Internal server error", body = ApiError)
     )
 )]
-pub async fn totp_validate(
+async fn totp_validate(
     State(state): State<Arc<AppState>>,
-    Path(user_key): Path<String>,
+    Path(key): Path<String>,
     Json(request): Json<ValidateTotpRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    debug!("Validating TOTP code for user with key: {}", user_key);
+    debug!("Validating TOTP code for user with key: {}", key);
 
-    let is_valid =
-        match mfa_service::validate_totp(State(state), &user_key, &request.totp_code).await {
-            Ok(result) => result,
-            Err(e) => {
-                error!("Failed to validate TOTP for user {}: {:?}", user_key, e);
-                return Err(e);
-            }
-        };
+    let is_valid = match mfa_service::validate_totp(State(state), &key, &request.totp_code).await {
+        Ok(result) => result,
+        Err(e) => {
+            error!("Failed to validate TOTP for user {}: {:?}", key, e);
+            return Err(e);
+        }
+    };
 
     let response = ValidateTotpResponse { is_valid };
     Ok((StatusCode::OK, Json(response)))
@@ -133,17 +132,17 @@ pub async fn totp_validate(
 ///
 /// # Path parameters
 ///
-/// * `user_key` - The unique identifier for the user
+/// * `key` - The unique identifier for the user
 ///
 /// # Returns
 ///
 /// A JSON response containing a list of backup codes.
 #[utoipa::path(
     get,
-    path = "/mfa/totp/backup-codes/{user_key}",
+    path = "/mfa/totp/backup-codes/{key}",
     tag = "TOTP",
     params(
-        ("user_key" = String, Path, description = "User's unique key")
+        ("key" = String, Path, description = "Unique user key")
     ),
     responses(
         (status = 200, description = "Backup codes generated", body = BackupCodesResponse),
@@ -151,28 +150,15 @@ pub async fn totp_validate(
         (status = 500, description = "Internal server error", body = ApiError)
     )
 )]
-pub async fn totp_backup_codes(
+async fn totp_backup_codes(
     State(state): State<Arc<AppState>>,
-    Path(user_key): Path<String>,
-) -> Result<impl IntoResponse, AppError> {
-    debug!("Generating backup codes for user with key: {}", user_key);
-
-    let backup_codes = match mfa_service::generate_backup_codes(State(state), &user_key).await {
-        Ok(codes) => codes,
+    Path(key): Path<String>,
+) -> Result<Response, AppError> {
+    match mfa_service::generate_backup_codes(State(state), &key).await {
+        Ok(codes) => Ok(codes),
         Err(e) => {
-            error!(
-                "Failed to generate backup codes for user {}: {:?}",
-                user_key, e
-            );
-            return Err(e);
+            error!("Failed to generate backup codes for user {}: {:?}", key, e);
+            Err(e)
         }
-    };
-
-    debug!(
-        "Successfully generated {} backup codes for user {}",
-        backup_codes.len(),
-        user_key
-    );
-    let response = BackupCodesResponse { backup_codes };
-    Ok((StatusCode::OK, Json(response)))
+    }
 }

@@ -133,33 +133,144 @@ pub async fn deactivate_totp_secret(
     }
 }
 
-pub async fn save_mfa_backup_code(
+/// Saves multiple backup codes for a user.
+///
+/// # Arguments
+///
+/// * `pool` - A PostgreSQL connection pool.
+/// * `user_id` - The ID of the user to associate with the backup codes.
+/// * `backup_codes` - A slice of backup codes to save.
+///
+/// # Returns
+///
+/// A `Result` containing the number of codes successfully saved,
+/// or an `AppError` on failure.
+pub async fn save_mfa_backup_codes(
     pool: &PgPool,
     user_id: i64,
-    backup_code_hash: String,
-    backup_code_hmac: Vec<u8>,
+    backup_codes: &[crate::db::entity::mfa::BackupCode],
 ) -> Result<i64, AppError> {
-    let now = Utc::now(); // Generate the current timestamp in Rust
-    match sqlx::query_scalar!(
+    let now = Utc::now();
+
+    // Begin transaction to ensure atomicity
+    let mut tx = pool.begin().await.map_err(|e| {
+        error!("Failed to begin transaction: {:?}", e);
+        AppError::new(
+            ErrorType::InternalServerError,
+            "Failed to process backup codes",
+        )
+    })?;
+
+    // First, delete any existing backup codes for this user
+    sqlx::query!(
         r#"
-        INSERT INTO user_mfa_backup_codes (user_id, backup_code_hash, backup_code_hmac, created_at)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id
+        DELETE FROM user_mfa_backup_codes
+        WHERE user_id = $1
         "#,
-        user_id,
-        backup_code_hash,
-        backup_code_hmac,
-        now
+        user_id
     )
-    .fetch_one(pool)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| {
+        error!("Failed to delete existing backup codes: {:?}", e);
+        AppError::new(
+            ErrorType::InternalServerError,
+            "Failed to update backup codes",
+        )
+    })?;
+
+    // Insert each backup code as a separate record
+    let mut inserted_count = 0;
+    for code in backup_codes {
+        match sqlx::query!(
+            r#"
+            INSERT INTO user_mfa_backup_codes (user_id, backup_code_hash, backup_code_hmac, created_at)
+            VALUES ($1, $2, $3, $4)
+            "#,
+            user_id,
+            code.hash,
+            code.hmac,
+            now
+        )
+        .execute(&mut *tx)
+        .await
+        {
+            Ok(_) => inserted_count += 1,
+            Err(e) => {
+                error!("Failed to insert backup code: {:?}", e);
+                // Continue with other codes even if one fails
+            }
+        }
+    }
+
+    // If we couldn't insert any codes, roll back and return an error
+    if inserted_count == 0 {
+        let _ = tx.rollback().await;
+        return Err(AppError::new(
+            ErrorType::InternalServerError,
+            "Failed to save any backup codes",
+        ));
+    }
+
+    // Commit the transaction
+    tx.commit().await.map_err(|e| {
+        error!("Failed to commit transaction: {:?}", e);
+        AppError::new(
+            ErrorType::InternalServerError,
+            "Failed to save backup codes",
+        )
+    })?;
+
+    Ok(inserted_count)
+}
+
+/// Retrieves the backup codes for a user.
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool
+/// * `user_id` - The ID of the user whose backup codes should be retrieved
+///
+/// # Returns
+///
+/// A `Result` containing the backup codes or an `AppError` on failure
+pub async fn get_backup_codes(
+    pool: &PgPool,
+    user_id: i64,
+) -> Result<crate::db::entity::mfa::BackupCodes, AppError> {
+    match sqlx::query!(
+        r#"
+        SELECT backup_code_hash
+        FROM user_mfa_backup_codes
+        WHERE user_id = $1 AND used_at IS NULL
+        "#,
+        user_id
+    )
+    .fetch_optional(pool)
     .await
     {
-        Ok(id) => Ok(id),
+        Ok(Some(record)) => {
+            // Parse the JSON string back to BackupCodes
+            let backup_codes: crate::db::entity::mfa::BackupCodes =
+                serde_json::from_str(&record.backup_code_hash).map_err(|e| {
+                    error!("Failed to parse backup codes: {:?}", e);
+                    AppError::new(
+                        ErrorType::InternalServerError,
+                        "Failed to process backup codes",
+                    )
+                })?;
+
+            Ok(backup_codes)
+        }
+        Ok(None) => Err(AppError::new(
+            ErrorType::NotFound,
+            "No backup codes found for this user",
+        )),
         Err(e) => {
-            error!("Failed to save Backup Code: {:?}", e);
+            error!("Failed to get backup codes: {:?}", e);
             Err(AppError::new(
                 ErrorType::InternalServerError,
-                "Failed to save Backup code",
+                "Failed to retrieve backup codes",
             ))
         }
     }

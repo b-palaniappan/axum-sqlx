@@ -152,7 +152,7 @@ async fn main() {
         .method_not_allowed_fallback(method_not_allowed)
         .with_state(shared_state)
         .layer(CompressionLayer::new())
-        .layer(TimeoutLayer::new(Duration::from_secs(5)))
+        .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .layer(cors);
 
     // run it

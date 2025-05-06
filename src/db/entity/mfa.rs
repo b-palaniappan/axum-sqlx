@@ -43,7 +43,19 @@ pub struct UserMfaBackupCodes {
     pub user_id: i64,
     pub backup_code_hash: String,
     pub backup_code_hmac: Vec<u8>,
+    pub used_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// Represents a single backup code with its hash and HMAC
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupCode {
+    pub hash: String,
+    pub hmac: Vec<u8>,
+}
+
+/// Represents a collection of backup codes for a user
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupCodes {
+    pub codes: Vec<BackupCode>,
 }

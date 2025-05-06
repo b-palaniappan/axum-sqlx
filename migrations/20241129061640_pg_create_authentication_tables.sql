@@ -123,8 +123,7 @@ CREATE TABLE user_mfa_backup_codes
     backup_code_hash VARCHAR(255)                                       NOT NULL,
     backup_code_hmac BYTEA                                              NOT NULL,
     used_at          TIMESTAMP WITH TIME ZONE,
-    created_at       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    UNIQUE (user_id)
+    created_at       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
 -- List of `remember this device` devices after 2FA.

@@ -223,13 +223,64 @@ pub async fn generate_backup_codes(
     // Generate 10 backup codes, each 8 characters long
     let backup_codes = crypto_helper::generate_backup_codes(10, 8).await;
 
-    // Return the plaintext backup codes to the user
-    // should store these safely as they won't be retrievable in plaintext again
-    Ok((
-        StatusCode::CREATED,
-        Json(BackupCodesResponse { backup_codes }),
-    )
-        .into_response())
+    // Hash the backup codes using Argon2id
+    let mut backup_code_records = Vec::new();
+    let mut successful_codes = Vec::new();
+    let mut errors = Vec::new();
+
+    for code in &backup_codes {
+        let hash_result = hash_password_sign_with_hmac(&state, code).await;
+        match hash_result {
+            Ok((hashed_code, hmac)) => {
+                // Add to our collection of hashed codes
+                backup_code_records.push(crate::db::entity::mfa::BackupCode {
+                    hash: hashed_code,
+                    hmac,
+                });
+                successful_codes.push(code.clone());
+            }
+            Err(e) => {
+                error!("Failed to hash backup code: {:?}", e);
+                errors.push(format!("Failed to hash backup code: {}", e));
+            }
+        }
+    }
+
+    // Check if we were able to successfully hash any codes
+    if backup_code_records.is_empty() {
+        return Err(AppError::new(
+            ErrorType::InternalServerError,
+            "Failed to generate any valid backup codes",
+        ));
+    }
+
+    // Store all backup codes in a single database row
+    match mfa_repository::save_mfa_backup_codes(&state.pg_pool, user.id, &backup_code_records).await
+    {
+        Ok(_) => {
+            // If some codes failed but others succeeded, log the errors but continue
+            if !errors.is_empty() {
+                error!("Some backup codes failed to process: {:?}", errors);
+            }
+
+            // Return the plaintext backup codes to the user
+            // should store these safely as they won't be retrievable in plaintext again
+            Ok((
+                StatusCode::CREATED,
+                Json(BackupCodesResponse {
+                    backup_codes: successful_codes,
+                }),
+            )
+                .into_response())
+        }
+        Err(e) => {
+            error!("Failed to save backup codes: {:?}", e);
+            Err(AppError::new(
+                ErrorType::InternalServerError,
+                "Failed to save backup codes",
+            ))
+        }
+    }
 }
 
 /// Creates a TOTP instance for a user with the given secret and email.

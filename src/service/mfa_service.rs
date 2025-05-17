@@ -14,6 +14,7 @@ use rand_chacha::rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use futures::future::join_all;
 use totp_rs::{Algorithm, TOTP};
 use tracing::error;
 use utoipa::ToSchema;
@@ -190,63 +191,75 @@ pub async fn validate_totp(
     Ok(is_valid)
 }
 
-/// Generate backup codes for when the TOTP device is unavailable.
+/// Generates backup codes for a user and saves them to the database.
 ///
 /// This function:
-/// 1. Retrieves the user from the database
-/// 2. Generates backup codes
-/// 3. Encrypts and stores the codes in the database
+/// 1. Retrieves the user from the database using their unique key.
+/// 2. Generates 10 backup codes.
+/// 3. Hashes the backup codes in parallel using HMAC for security.
+/// 4. Saves the hashed backup codes to the database.
+/// 5. Returns the plaintext backup codes in the response.
 ///
 /// # Arguments
 ///
-/// * `state` - The application state containing database connection pools
-/// * `user_key` - The unique identifier for the user
+/// * `state` - The application state containing database connection pools and other shared resources.
+/// * `user_key` - The unique identifier for the user.
 ///
 /// # Returns
 ///
-/// Returns a `Result` containing a vector of backup codes,
+/// Returns a `Result` containing a `Response` with the plaintext backup codes on success,
 /// or an `AppError` on failure.
+///
+/// # Errors
+///
+/// This function returns an `AppError` if:
+/// - The user cannot be found in the database.
+/// - Hashing the backup codes fails for all codes.
+/// - Saving the hashed backup codes to the database fails.
 pub async fn generate_backup_codes(
     State(state): State<Arc<AppState>>,
     user_key: &String,
 ) -> Result<Response, AppError> {
-    // Get the user
-    let user = users_repository::get_user_by_key(&state.pg_pool, user_key).await;
-    let user = match user {
-        Ok(user) => user,
-        Err(e) => {
-            error!("Failed to get user: {:?}", e);
-            return Err(AppError::new(ErrorType::NotFound, "User not found"));
-        }
-    };
+    // Retrieve the user
+    let user = users_repository::get_user_by_key(&state.pg_pool, user_key)
+        .await
+        .map_err(|_| AppError::new(ErrorType::NotFound, "User not found"))?;
 
-    // Generate 10 backup codes, each 8 characters long
+    // Generate 10 backup codes
     let backup_codes = crypto_helper::generate_backup_codes(10, 8).await;
 
-    // Hash the backup codes using Argon2id
-    let mut backup_code_records = Vec::new();
-    let mut successful_codes = Vec::new();
-    let mut errors = Vec::new();
-
-    for code in &backup_codes {
-        let hash_result = hash_password_sign_with_hmac(&state, code).await;
-        match hash_result {
-            Ok((hashed_code, hmac)) => {
-                // Add to our collection of hashed codes
-                backup_code_records.push(crate::db::entity::mfa::BackupCode {
-                    hash: hashed_code,
-                    hmac,
-                });
-                successful_codes.push(code.clone());
-            }
-            Err(e) => {
-                error!("Failed to hash backup code: {:?}", e);
-                errors.push(format!("Failed to hash backup code: {}", e));
+    // Hash the backup codes in parallel
+    let hash_futures = backup_codes.iter().map(|code| {
+        let state = state.clone();
+        let code = code.clone();
+        async move {
+            match hash_password_sign_with_hmac(&state, &code).await {
+                Ok((hashed_code, hmac)) => Some((
+                    crate::db::entity::mfa::BackupCode {
+                        hash: hashed_code,
+                        hmac,
+                    },
+                    code,
+                )),
+                Err(e) => {
+                    error!("Failed to hash backup code: {:?}", e);
+                    None
+                }
             }
         }
+    });
+
+    let results = join_all(hash_futures).await;
+
+    let mut backup_code_records = Vec::new();
+    let mut successful_codes = Vec::new();
+
+    for result in results.into_iter().flatten() {
+        let (record, code) = result;
+        backup_code_records.push(record);
+        successful_codes.push(code);
     }
 
-    // Check if we were able to successfully hash any codes
     if backup_code_records.is_empty() {
         return Err(AppError::new(
             ErrorType::InternalServerError,
@@ -254,33 +267,22 @@ pub async fn generate_backup_codes(
         ));
     }
 
-    // Store all backup codes in a single database row
-    match mfa_repository::save_mfa_backup_codes(&state.pg_pool, user.id, &backup_code_records).await
-    {
-        Ok(_) => {
-            // If some codes failed but others succeeded, log the errors but continue
-            if !errors.is_empty() {
-                error!("Some backup codes failed to process: {:?}", errors);
-            }
-
-            // Return the plaintext backup codes to the user
-            // should store these safely as they won't be retrievable in plaintext again
-            Ok((
-                StatusCode::CREATED,
-                Json(BackupCodesResponse {
-                    backup_codes: successful_codes,
-                }),
-            )
-                .into_response())
-        }
-        Err(e) => {
-            error!("Failed to save backup codes: {:?}", e);
-            Err(AppError::new(
+    mfa_repository::save_mfa_backup_codes(&state.pg_pool, user.id, &backup_code_records)
+        .await
+        .map_err(|_| {
+            AppError::new(
                 ErrorType::InternalServerError,
                 "Failed to save backup codes",
-            ))
-        }
-    }
+            )
+        })?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(BackupCodesResponse {
+            backup_codes: successful_codes,
+        }),
+    )
+        .into_response())
 }
 
 /// Creates a TOTP instance for a user with the given secret and email.

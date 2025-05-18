@@ -57,7 +57,7 @@ pub fn totp_routes() -> Router<Arc<AppState>> {
 #[utoipa::path(
     post,
     path = "/mfa/totp/register/{key}",
-    tag = "TOTP",
+    tag = "TOTP Multi-Factor Authentication",
     params(
         ("key" = String, Path, description = "User's unique key")
     ),
@@ -103,7 +103,7 @@ async fn totp_register(
 #[utoipa::path(
     post,
     path = "/mfa/totp/validate/{key}",
-    tag = "TOTP",
+    tag = "TOTP Multi-Factor Authentication",
     params(
         ("key" = String, Path, description = "User's unique key")
     ),
@@ -148,7 +148,7 @@ async fn totp_validate(
 #[utoipa::path(
     get,
     path = "/mfa/totp/backup-codes/{key}",
-    tag = "TOTP",
+    tag = "TOTP Multi-Factor Authentication",
     params(
         ("key" = String, Path, description = "Unique user key")
     ),
@@ -200,7 +200,7 @@ async fn totp_backup_codes(
 #[utoipa::path(
     post,
     path = "/mfa/totp/validate-backup/{key}",
-    tag = "TOTP",
+    tag = "TOTP Multi-Factor Authentication",
     params(
         ("key" = String, Path, description = "User's unique key")
     ),
@@ -242,7 +242,7 @@ async fn validate_backup_code(
 #[utoipa::path(
     delete,
     path = "/mfa/totp/backup-codes/{key}",
-    tag = "TOTP",
+    tag = "TOTP Multi-Factor Authentication",
     params(
         ("key" = String, Path, description = "Unique user key")
     ),

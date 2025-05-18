@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:15
+        image: postgres:17
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -39,6 +39,13 @@ jobs:
         BUILD_TARGET: [release]
     steps:
       - uses: actions/checkout@v4
+      - name: Update DATABASE_URL in .env
+        run: |
+          if [ -f .env ]; then
+            sed -i 's|^DATABASE_URL=.*$|DATABASE_URL=postgres://postgres:postgres@localhost:5432/test_db|' .env
+          else
+            echo "DATABASE_URL=postgres://postgres:postgres@localhost:5432/test_db" >> .env
+          fi
       - name: Install sqlx-cli
         run: cargo install sqlx-cli --no-default-features --features postgres
       - name: Wait for Postgres

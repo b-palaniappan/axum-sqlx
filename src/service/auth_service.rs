@@ -1,15 +1,3 @@
-// Todo: Implement
-// Registration (also called create user) - Implemented
-// Login - Implemented with JWT and Refresh token.
-// Passkey based login
-// Forgot password -Implemented.
-// Reset password - Implemented.
-// Change password.
-// Logout - Work in progress
-// JWT or Auth Token based logged in.
-// Email verification
-// Phone verification - using SMS
-
 use crate::api::model::auth::{
     ForgotPasswordRequest, ForgotPasswordResponse, LogoutRequest, PasskeyAuthenticationRequest,
     PasskeyRegistrationRequest, RefreshRequest, ResetPasswordRequest, ResetPasswordResponse,

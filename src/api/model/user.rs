@@ -107,12 +107,26 @@ pub struct Message {
     pub status: String,
 }
 
-#[derive(Debug, Deserialize, IntoParams)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct PaginationQuery {
     /// current page of the pagination
     #[param(default = 1, example = 1)]
+    #[schema(example = 1)]
+    #[serde(default = "default_page")]
     pub page: i64,
     /// number of items per page
-    #[param(default = 20, example = 20, required)]
+    #[param(default = 20, example = 20)]
+    #[schema(example = 20)]
+    #[serde(default = "default_size")]
     pub size: i64,
+}
+
+/// Default function for pagination page
+fn default_page() -> i64 {
+    1
+}
+
+/// Default function for pagination size
+fn default_size() -> i64 {
+    20
 }

@@ -2,18 +2,13 @@ use crate::api::model::user::{
     PaginationQuery, StoredUser, StoredUsers, UpdateUserRequest, UserRequest,
 };
 use crate::config::app_config::AppState;
-use crate::db::repo::{user_login_credentials_repository, users_repository};
-use crate::error::error_model::{ApiError, AppError, ErrorType};
-use crate::util::crypto_helper;
+use crate::error::error_model::{ApiError, AppError};
+use crate::service::user_service;
 use axum::extract::{Path, Query, State};
-use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use nanoid::nanoid;
 use std::sync::Arc;
-use tracing::error;
-use validator::Validate;
 
 pub fn user_routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -45,85 +40,9 @@ async fn create_user_handler(
     State(state): State<Arc<AppState>>,
     Json(user_request): Json<UserRequest>,
 ) -> Response {
-    create_user(State(state), user_request)
+    user_service::create_user(state, user_request)
         .await
         .into_response()
-}
-
-async fn create_user(
-    State(state): State<Arc<AppState>>,
-    user_request: UserRequest,
-) -> Result<Response, AppError> {
-    match user_request.validate() {
-        Ok(_) => (),
-        Err(e) => {
-            return Err(AppError::new(
-                ErrorType::RequestValidationError {
-                    validation_error: e,
-                    object: "UserRequest".to_string(),
-                },
-                "Validation error. Check the request body.",
-            ));
-        }
-    }
-    let user_key = nanoid!();
-
-    // Hash password and sign with HMAC using helper function
-    let (password_hash, password_hmac) =
-        crypto_helper::hash_password_sign_with_hmac(&state, &user_request.password)
-            .await
-            .map_err(|_| {
-                error!("Error hashing password");
-                AppError::new(ErrorType::InternalServerError, "Error hashing password.")
-            })?;
-
-    let result = users_repository::create_user(
-        &state.pg_pool,
-        &user_key,
-        user_request.first_name,
-        user_request.last_name,
-        &user_request.email,
-    )
-    .await;
-
-    match result {
-        Ok(user) => {
-            user_login_credentials_repository::create_user_login_credentials(
-                &state.pg_pool,
-                user.id,
-                &password_hash.to_string(),
-                &*password_hmac,
-            )
-            .await
-            .map_err(|e| {
-                error!("Error storing user login credentials: {:?}", e);
-                AppError::new(
-                    ErrorType::InternalServerError,
-                    "Error storing user login credentials",
-                )
-            })?;
-
-            // Successfully created user and stored credentials
-            Ok((
-                StatusCode::CREATED,
-                [(header::LOCATION, format!("/users/{}", user.key))],
-                Json(StoredUser {
-                    key: user.key,
-                    first_name: user.first_name,
-                    last_name: user.last_name,
-                    email: user.email,
-                }),
-            )
-                .into_response())
-        }
-        Err(e) => {
-            error!("Error creating user. {:?}", e);
-            Err(AppError::new(
-                ErrorType::InternalServerError,
-                "Error creating user",
-            ))
-        }
-    }
 }
 
 // GET all user handler with pagination.
@@ -146,32 +65,8 @@ async fn get_users_handler(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PaginationQuery>,
 ) -> Result<Response, AppError> {
-    let page = query.page;
-    let limit = query.size;
-    let users = users_repository::get_users(&state.pg_pool, limit, page).await;
-
-    let count = users_repository::count_users(&state.pg_pool).await;
-    let items_in_page = users.as_ref().unwrap().len();
-    let user_count = count.unwrap_or_else(|_| 0);
-
-    match users {
-        Ok(users) => Ok((
-            StatusCode::OK,
-            Json(StoredUsers {
-                users: users.into_iter().map(|u| StoredUser::from(u)).collect(),
-                current_page: page,
-                total_items: user_count,
-                total_pages: (user_count as f64 / limit as f64).ceil() as i64,
-                items_per_page: limit,
-                items_in_page: items_in_page as i64,
-            }),
-        )
-            .into_response()),
-        Err(_) => Err(AppError::new(
-            ErrorType::InternalServerError,
-            "Error getting users",
-        )),
-    }
+    // The defaults will be applied automatically from the PaginationQuery struct
+    user_service::get_users(state, query).await
 }
 
 // Get user by user id.
@@ -195,18 +90,7 @@ async fn get_user_handler(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> Result<Response, AppError> {
-    let user = users_repository::get_user_by_key(&state.pg_pool, &key).await;
-
-    match user {
-        Ok(user) => Ok((StatusCode::OK, Json(StoredUser::from(user))).into_response()),
-        Err(e) => {
-            error!("Error getting user: {}", e);
-            Err(AppError::new(
-                ErrorType::NotFound,
-                "User not found for ID: ".to_owned() + &key,
-            ))
-        }
-    }
+    user_service::get_user_by_key(state, key).await
 }
 
 // PATCH update user by user id.
@@ -233,24 +117,7 @@ async fn update_user_handler(
     Path(key): Path<String>,
     Json(update_user_request): Json<UpdateUserRequest>,
 ) -> Result<Response, AppError> {
-    let result = users_repository::update_user(&state.pg_pool, &key, update_user_request).await;
-
-    match result {
-        Ok(user) => Ok((
-            StatusCode::OK,
-            Json(StoredUser {
-                key: user.key,
-                first_name: user.first_name,
-                last_name: user.last_name,
-                email: user.email,
-            }),
-        )
-            .into_response()),
-        Err(_) => Err(AppError::new(
-            ErrorType::NotFound,
-            "User not found for ID: ".to_owned() + &key,
-        )),
-    }
+    user_service::update_user(state, key, update_user_request).await
 }
 
 // Delete user by user id.
@@ -274,10 +141,5 @@ async fn delete_user_handler(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> Result<Response, AppError> {
-    let result = users_repository::delete_user(&state.pg_pool, &key).await;
-
-    match result {
-        Ok(_) => Ok((StatusCode::NO_CONTENT,).into_response()),
-        Err(_) => Ok((StatusCode::NO_CONTENT,).into_response()),
-    }
+    user_service::delete_user(state, key).await
 }

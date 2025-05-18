@@ -1,10 +1,15 @@
 name: Rust Build and Test
+# This workflow will build and test Rust code using GitHub Actions.
+# It will run on pushes and pull requests to the main branch.
+# It uses the latest version of Ubuntu as the runner.
+# The workflow caches the cargo registry and git files to speed up builds.
+# TODO: work in progress
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,13 +17,40 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/test_db
+      CARGO_TERM_COLOR: always
     strategy:
       matrix:
-        BUILD_TARGET: [release] # refers to a cargo profile
-    outputs:
-      release_built: ${{ steps.set-output.outputs.release_built }}
+        BUILD_TARGET: [release]
     steps:
       - uses: actions/checkout@v4
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features postgres
+      - name: Wait for Postgres
+        run: |
+          for i in {1..10}; do
+            pg_isready -h localhost -U postgres && break
+            sleep 2
+          done
+      - name: Run sqlx migrations
+        run: sqlx migrate run
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
       - name: Build binaries in "${{ matrix.BUILD_TARGET }}" mode
         run: cargo build --profile ${{ matrix.BUILD_TARGET }}
       - name: Run tests in "${{ matrix.BUILD_TARGET }}" mode

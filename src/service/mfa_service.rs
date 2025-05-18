@@ -1,3 +1,6 @@
+use crate::api::model::mfa::{
+    BackupCodesResponse, DeleteBackupCodesResponse, TotpResponse, ValidateBackupCodeResponse,
+};
 use crate::config::app_config::AppState;
 use crate::db::entity::mfa::TotpSecret;
 use crate::db::repo::{mfa_repository, users_repository};
@@ -15,11 +18,9 @@ use futures::future::join_all;
 use hmac::Mac;
 use rand_chacha::rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use totp_rs::{Algorithm, TOTP};
 use tracing::error;
-use utoipa::ToSchema;
 
 /// Registers a new TOTP device for a user.
 ///
@@ -99,6 +100,7 @@ pub async fn register_totp(
     let response = TotpResponse {
         totp_url,
         qr_code: qr_base64,
+        qr_type: "image/png".to_string(),
     };
 
     Ok((StatusCode::OK, Json(response)).into_response())
@@ -468,60 +470,4 @@ pub async fn delete_backup_codes(
         Json(DeleteBackupCodesResponse { deleted_count }),
     )
         .into_response())
-}
-
-/// Request to validate a TOTP code
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ValidateTotpRequest {
-    pub totp_code: String,
-}
-
-/// Response containing TOTP information
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TotpResponse {
-    /// URL that can be used to manually configure TOTP app
-    pub totp_url: String,
-    /// Base64-encoded QR code image
-    pub qr_code: String,
-}
-
-/// Response after validating a TOTP code
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ValidateTotpResponse {
-    /// Whether the TOTP code is valid
-    pub is_valid: bool,
-}
-
-/// Response containing backup codes
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct BackupCodesResponse {
-    /// List of backup codes
-    pub backup_codes: Vec<String>,
-}
-
-/// Request to validate a backup code
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ValidateBackupCodeRequest {
-    pub backup_code: String,
-}
-
-/// Response after validating a backup code
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ValidateBackupCodeResponse {
-    /// Whether the backup code is valid
-    pub is_valid: bool,
-}
-
-/// Response after deleting backup codes
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct DeleteBackupCodesResponse {
-    /// The number of backup codes that were deleted
-    pub deleted_count: i64,
 }

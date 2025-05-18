@@ -1,10 +1,10 @@
-use crate::config::app_config::AppState;
-use crate::error::error_model::{ApiError, AppError};
-use crate::service::mfa_service;
-use crate::service::mfa_service::{
+use crate::api::model::mfa::{
     BackupCodesResponse, DeleteBackupCodesResponse, TotpResponse, ValidateBackupCodeRequest,
     ValidateBackupCodeResponse, ValidateTotpRequest, ValidateTotpResponse,
 };
+use crate::config::app_config::AppState;
+use crate::error::error_model::{ApiError, AppError};
+use crate::service::mfa_service;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};

@@ -1,6 +1,7 @@
 use crate::config::app_config::AppState;
 use axum::extract::State;
-use redis::AsyncCommands;
+use bb8_redis::redis;
+use bb8_redis::redis::AsyncCommands;
 use serde::Serialize;
 use std::error::Error;
 use std::sync::Arc;

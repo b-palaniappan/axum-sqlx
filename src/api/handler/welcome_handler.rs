@@ -5,7 +5,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use redis::AsyncCommands;
+use bb8_redis::redis::AsyncCommands;
 use sqlx::Error;
 use std::sync::Arc;
 use tracing::{info, warn};

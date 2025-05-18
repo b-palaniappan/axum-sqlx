@@ -4,17 +4,13 @@ use crate::api::model::user::{
 use crate::config::app_config::AppState;
 use crate::db::repo::{user_login_credentials_repository, users_repository};
 use crate::error::error_model::{ApiError, AppError, ErrorType};
-use argon2::password_hash::rand_core::OsRng;
-use argon2::password_hash::SaltString;
-use argon2::{Algorithm, Argon2, Params, PasswordHasher};
+use crate::util::crypto_helper;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use hmac::{Hmac, Mac};
 use nanoid::nanoid;
-use sha2::Sha512;
 use std::sync::Arc;
 use tracing::error;
 use validator::Validate;
@@ -72,31 +68,14 @@ async fn create_user(
     }
     let user_key = nanoid!();
 
-    // Hash password using Argon2.
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    let password_hash = argon2
-        .hash_password_customized(
-            user_request.password.as_bytes(),
-            Some(Algorithm::Argon2id.ident()),
-            Some(19),
-            Params::new(65536, 4, 5, Some(64)).unwrap(),
-            &salt,
-        )
-        .unwrap();
-
-    // create HMAC of hashed password for integrate check.
-    let mut mac = match Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()) {
-        Ok(mac) => mac,
-        Err(_) => {
-            return Err(AppError::new(
-                ErrorType::UnauthorizedError,
-                "Invalid credentials. Check email and password.",
-            ))
-        }
-    };
-    mac.update(password_hash.to_string().as_bytes());
-    let password_hmac = mac.finalize();
+    // Hash password and sign with HMAC using helper function
+    let (password_hash, password_hmac) =
+        crypto_helper::hash_password_sign_with_hmac(&state, &user_request.password)
+            .await
+            .map_err(|_| {
+                error!("Error hashing password");
+                AppError::new(ErrorType::InternalServerError, "Error hashing password.")
+            })?;
 
     let result = users_repository::create_user(
         &state.pg_pool,
@@ -113,7 +92,7 @@ async fn create_user(
                 &state.pg_pool,
                 user.id,
                 &password_hash.to_string(),
-                password_hmac.into_bytes().as_ref(),
+                &*password_hmac,
             )
             .await
             .map_err(|e| {
@@ -204,7 +183,7 @@ async fn get_users_handler(
     path = "/users/{key}",
     tag = "Users",
     params(
-        ("id" = String, Path, description = "Unique user id")
+        ("key" = String, Path, description = "Unique user key")
     ),
     responses(
         (status = 200, description = "User created successfully", body = StoredUser),

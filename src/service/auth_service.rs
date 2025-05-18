@@ -6,8 +6,6 @@
 // Reset password - Implemented.
 // Change password.
 // Logout - Work in progress
-// TOTP
-// TOTP QR Code.
 // JWT or Auth Token based logged in.
 // Email verification
 // Phone verification - using SMS
@@ -27,10 +25,10 @@ use crate::db::repo::{
 };
 use crate::error::error_model::{AppError, ErrorType};
 use crate::service::email;
+use crate::util::crypto_helper::{
+    hash_password_sign_with_hmac, run_fake_password_hash_check, verify_password_hash_hmac,
+};
 use crate::AppState;
-use argon2::password_hash::rand_core::OsRng;
-use argon2::password_hash::SaltString;
-use argon2::{Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -38,14 +36,12 @@ use axum::Json;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::prelude::BASE64_URL_SAFE;
 use base64::Engine;
-use hmac::{Hmac, Mac};
 use jsonwebtoken::jwk::{Jwk, JwkSet, KeyAlgorithm, KeyOperations, PublicKeyUse};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use nanoid::nanoid;
 use openssl::pkey::PKey;
 use openssl::rsa::Rsa;
 use serde::{Deserialize, Serialize};
-use sha2::Sha512;
 use sqlx::types::chrono::Utc;
 use sqlx::PgPool;
 use std::ops::Add;
@@ -127,7 +123,7 @@ pub async fn validate_token(
                     })?;
 
             match cached_jwt {
-                Some(jwt) if jwt.value == token_data.claims.jti => {
+                Some(jwt) if jwt.jti == token_data.claims.jti => {
                     Ok((StatusCode::OK, Json(token_data.claims)).into_response())
                 }
                 _ => Err(AppError::new(
@@ -198,7 +194,7 @@ pub async fn authenticate_user(
                     Ok(Some(credentials)) => {
                         let credential_verification = verify_password_hash_hmac(
                             &state,
-                            &user_auth_request,
+                            &user_auth_request.password,
                             &credentials.password_hash,
                             &credentials.password_hmac,
                             &user.id,
@@ -224,139 +220,29 @@ pub async fn authenticate_user(
                     }
                     Ok(None) => {
                         error!("User login credentials not found for user ID: {}", user.id);
-                        return Err(AppError::new(
+                        Err(AppError::new(
                             ErrorType::UnauthorizedError,
                             "Invalid credentials. Check email and password.",
-                        ));
+                        ))
                     }
                     Err(e) => {
                         error!("Error getting user login credentials: {:?}", e);
-                        return Err(AppError::new(
+                        Err(AppError::new(
                             ErrorType::InternalServerError,
                             "Something went wrong. Please try again later.",
-                        ));
+                        ))
                     }
                 }
             } else {
                 // Trigger a fake check for inactive user.
-                run_fake_password_hash_check(state).await
+                run_fake_password_hash_check(&state).await
             }
         }
         Err(_) => {
             // User not found.
-            run_fake_password_hash_check(state).await
+            run_fake_password_hash_check(&state).await
         }
     }
-}
-
-/// Performs a fake password hash verification to mitigate user enumeration attacks.
-///
-/// This function triggers a fake password hash verification to ensure that the response time
-/// remains consistent regardless of whether the user ID exists or not. This prevents attackers
-/// from determining the validity of a user ID based on response time.
-///
-/// # Arguments
-///
-/// * `state` - The application state containing the dummy hashed password.
-///
-/// # Returns
-///
-/// * `Result<Response, AppError>` - Always returns an `AppError` with an unauthorized error message.
-///
-/// # Errors
-///
-/// This function will always return an `AppError` with the message "Invalid credentials. Check email and password."
-/// to simulate a failed authentication attempt.
-async fn run_fake_password_hash_check(state: Arc<AppState>) -> Result<Response, AppError> {
-    let argon2 = Argon2::default();
-
-    // Trigger a fake check to avoid returning immediately.
-    // Which can be used by hacker to figure out user id is not valid.
-    let dummy_password_hash = state.dummy_hashed_password.clone();
-    let password_hash = PasswordHash::new(&*dummy_password_hash).unwrap();
-    let _ = argon2.verify_password("dummy".as_bytes(), &password_hash);
-    Err(AppError::new(
-        ErrorType::UnauthorizedError,
-        "Invalid credentials. Check email and password.",
-    ))
-}
-
-/// Verifies the password hash and HMAC for a user.
-///
-/// This function performs two levels of verification:
-/// 1. It verifies the provided password against the stored password hash using the Argon2 algorithm.
-/// 2. It verifies the integrity of the password hash using an HMAC to ensure it has not been tampered with.
-///
-/// If either verification fails, the function logs the failure, updates the user's failed login attempts,
-/// and returns an `AppError`.
-///
-/// # Arguments
-///
-/// * `state` - A reference to the application state containing the HMAC key and database connection pool.
-/// * `user_auth_request` - The user authentication request containing the plaintext password to verify.
-/// * `password_hash` - The stored password hash to verify against.
-/// * `password_hmac` - The HMAC of the stored password hash for integrity verification.
-/// * `user_id` - The ID of the user whose password is being verified.
-///
-/// # Returns
-///
-/// * `Result<(), AppError>` - Returns `Ok(())` if both verifications succeed, otherwise returns an `AppError`.
-///
-/// # Errors
-///
-/// This function will return an `AppError` if:
-/// * The password verification fails.
-/// * The HMAC verification fails.
-/// * There is an error updating the user's failed login attempts in the database.
-async fn verify_password_hash_hmac(
-    state: &Arc<AppState>,
-    user_auth_request: &UserAuthRequest,
-    password_hash: &String,
-    password_hmac: &[u8],
-    user_id: &i64,
-) -> Result<(), AppError> {
-    let pg_pool = &state.pg_pool;
-    let parsed_hash = PasswordHash::new(password_hash).unwrap();
-
-    if Argon2::default()
-        .verify_password(user_auth_request.password.as_bytes(), &parsed_hash)
-        .is_err()
-    {
-        error!("Password verification failed for user ID: {}", user_id);
-        handle_user_authentication_failed(pg_pool, user_id)
-            .await
-            .map_err(|e| {
-                error!("Error handling user authentication failed: {:?}", e);
-                AppError::new(
-                    ErrorType::InternalServerError,
-                    "Something went wrong. Please try again later.",
-                )
-            })?;
-        return Err(AppError::new(
-            ErrorType::UnauthorizedError,
-            "Invalid credentials. Check email and password.",
-        ));
-    }
-
-    let mut mac = Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()).unwrap();
-    mac.update(password_hash.as_bytes());
-    if mac.verify_slice(password_hmac).is_err() {
-        error!("HMAC verification failed for user ID: {}", user_id);
-        handle_user_authentication_failed(pg_pool, user_id)
-            .await
-            .map_err(|e| {
-                error!("Error handling user authentication failed: {:?}", e);
-                AppError::new(
-                    ErrorType::InternalServerError,
-                    "Something went wrong. Please try again later.",
-                )
-            })?;
-        return Err(AppError::new(
-            ErrorType::UnauthorizedError,
-            "Invalid credentials. Check email and password.",
-        ));
-    }
-    Ok(())
 }
 
 /// Generates a new access token for a user and prepares the response.
@@ -480,7 +366,7 @@ async fn cache_token_id(
             )
         })?;
     if let Some(cached_user_key) = cached_user_key {
-        if !cached_user_key.value.is_empty() {
+        if !cached_user_key.jti.is_empty() {
             valkey_cache::delete_object(State(state.clone()), &user_key)
                 .await
                 .map_err(|e| {
@@ -498,7 +384,7 @@ async fn cache_token_id(
         State(state.clone()),
         &user_key,
         &JwtId {
-            value: jti_clone.clone(),
+            jti: jti_clone.clone(),
         },
         Duration::from_secs(state.jwt_expiration.clone()).as_secs(),
     )
@@ -566,32 +452,6 @@ async fn generate_persist_refresh_token(
     })?;
 
     Ok(refresh_token)
-}
-
-// Update failed login attempts for user.
-async fn handle_user_authentication_failed(
-    pg_pool: &PgPool,
-    user_id: &i64,
-) -> Result<(), AppError> {
-    auth_repository::increase_failed_login_attempts(pg_pool, user_id)
-        .await
-        .unwrap();
-
-    let user = auth_repository::get_user_by_id(pg_pool, user_id)
-        .await
-        .unwrap();
-
-    // Lock user account if failed login attempts are more than 5.
-    if user.failed_login_attempts.unwrap_or(0) >= 5 {
-        auth_repository::lock_user_account(pg_pool, user_id)
-            .await
-            .unwrap();
-        return Err(AppError::new(
-            ErrorType::UnauthorizedError,
-            "User account is locked. Contact support.",
-        ));
-    }
-    Ok(())
 }
 
 async fn reset_failed_login_attempts(pg_pool: &PgPool, user_id: i64) {
@@ -833,10 +693,10 @@ struct Claims {
 ///
 /// # Fields
 ///
-/// * `value` - A string containing the unique identifier of the JWT token.
+/// * `jti` - A string containing the unique identifier of the JWT token.
 #[derive(Debug, Serialize, Deserialize)]
 struct JwtId {
-    value: String,
+    jti: String,
 }
 
 /// Handles the forgot password request by generating a reset token and sending an email.
@@ -1003,35 +863,12 @@ pub async fn reset_password(
     };
 
     // Step 3: Hash the new password with Argon2
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    let password_hash = argon2
-        .hash_password_customized(
-            new_password.as_bytes(),
-            Some(argon2::Algorithm::Argon2id.ident()),
-            Some(19),
-            Params::new(65536, 4, 5, Some(64)).unwrap(),
-            &salt,
-        )
-        .map_err(|e| {
-            error!("Error hashing password: {:?}", e);
-            AppError::new(
-                ErrorType::InternalServerError,
-                "Failed to process the password.",
-            )
-        })?
-        .to_string();
-
-    // Generate HMAC for password hash to detect tampering
-    let mut mac = Hmac::<Sha512>::new_from_slice(state.hmac_key.as_bytes()).map_err(|e| {
-        error!("Error creating HMAC: {:?}", e);
-        AppError::new(
-            ErrorType::InternalServerError,
-            "Failed to process the password.",
-        )
-    })?;
-    mac.update(password_hash.as_bytes());
-    let password_hmac = mac.finalize().into_bytes().to_vec();
+    let (password_hash, password_hmac) = hash_password_sign_with_hmac(&state, &new_password)
+        .await
+        .map_err(|_| {
+            error!("Error hashing password");
+            AppError::new(ErrorType::InternalServerError, "Error hashing password.")
+        })?;
 
     // Step 4: Update the user's password
     auth_repository::update_user_password(pg_pool, user_id, &password_hash, &password_hmac)
@@ -1235,14 +1072,14 @@ pub async fn finish_registration(
                     // Clean up the registration state from cache
                     let _ = valkey_cache::delete_object(State(state.clone()), &request_id).await;
                     info!("Passkey registration successful!!");
-                    return Ok((StatusCode::NO_CONTENT,).into_response());
+                    Ok((StatusCode::NO_CONTENT,).into_response())
                 }
                 Err(e) => {
                     error!("Error storing passkey: {:?}", e);
-                    return Err(AppError::new(
+                    Err(AppError::new(
                         ErrorType::InternalServerError,
                         "Failed to complete registration. Please try again later.",
-                    ));
+                    ))
                 }
             }
         }
@@ -1384,6 +1221,9 @@ pub async fn finish_authentication(
                     )
                 })?;
             let user_id = user.id;
+
+            // Cleanup the cache after successful authentication
+            let _ = valkey_cache::delete_object(State(state.clone()), &request_id).await;
 
             // Generate and persist a new refresh token for the user
             let refresh_token = match generate_persist_refresh_token(&state, user_id).await {

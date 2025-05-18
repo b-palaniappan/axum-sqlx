@@ -31,6 +31,25 @@ pub async fn initialize_app_state() -> Arc<AppState> {
     let dummy_hashed_password =
         env::var("DUMMY_HASHED_PASSWORD").expect("Error getting dummy password");
 
+    // Get the encryption key for sensitive data like TOTP secrets
+    let encryption_key_str = env::var("ENCRYPTION_KEY").expect("ENCRYPTION_KEY must be set");
+    let argon_pepper = env::var("ARGON_PEPPER").expect("Error getting Argon2 pepper");
+
+    // Convert to bytes and ensure it's exactly 32 bytes
+    let key_bytes = encryption_key_str.as_bytes();
+    if key_bytes.len() != 32 {
+        panic!(
+            "ENCRYPTION_KEY must be exactly 32 bytes when encoded as UTF-8. Current length: {}",
+            key_bytes.len()
+        );
+    }
+
+    // Convert to fixed-size array
+    let encryption_key: [u8; 32] = match key_bytes.try_into() {
+        Ok(key) => key,
+        Err(_) => panic!("Failed to convert encryption key to 32 byte array"),
+    };
+
     // Setup connection pool.
     info!("Initializing database connection pool");
     let pg_pool = PgPoolOptions::new()
@@ -77,6 +96,8 @@ pub async fn initialize_app_state() -> Arc<AppState> {
         jwt_expiration,
         jwt_issuer,
         dummy_hashed_password,
+        encryption_key,
+        argon_pepper,
     })
 }
 
@@ -104,4 +125,6 @@ pub struct AppState {
     pub jwt_expiration: u64,
     pub jwt_issuer: String,
     pub dummy_hashed_password: String,
+    pub encryption_key: [u8; 32],
+    pub argon_pepper: String,
 }

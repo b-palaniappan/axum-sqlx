@@ -2,8 +2,8 @@ use crate::config::app_config::AppState;
 use crate::error::error_model::{ApiError, AppError};
 use crate::service::mfa_service;
 use crate::service::mfa_service::{
-    BackupCodesResponse, TotpResponse, ValidateBackupCodeRequest, ValidateBackupCodeResponse,
-    ValidateTotpRequest, ValidateTotpResponse,
+    BackupCodesResponse, DeleteBackupCodesResponse, TotpResponse, ValidateBackupCodeRequest,
+    ValidateBackupCodeResponse, ValidateTotpRequest, ValidateTotpResponse,
 };
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -22,6 +22,7 @@ use tracing::{debug, error};
 /// - POST /validate/{key} - Validate a TOTP code
 /// - GET /backup-codes/{key} - Generate backup codes for a user
 /// - POST /validate-backup/{key} - Validate a backup code
+/// - DELETE /backup-codes/{key} - Delete all backup codes for a user
 ///
 /// # Example
 ///
@@ -35,6 +36,10 @@ pub fn totp_routes() -> Router<Arc<AppState>> {
         .route("/validate/{key}", post(totp_validate))
         .route("/backup-codes/{key}", get(totp_backup_codes))
         .route("/validate-backup/{key}", post(validate_backup_code))
+        .route(
+            "/backup-codes/{key}",
+            axum::routing::delete(delete_backup_codes),
+        )
 }
 
 /// Register a new TOTP device for a user.
@@ -217,6 +222,46 @@ async fn validate_backup_code(
         Ok(response) => Ok(response),
         Err(e) => {
             error!("Failed to validate backup code for user {}: {:?}", key, e);
+            Err(e)
+        }
+    }
+}
+
+/// Delete all backup codes for a user.
+///
+/// This endpoint soft deletes all backup codes for a user by setting
+/// the deleted_at timestamp, making them unusable for future validation.
+///
+/// # Path parameters
+///
+/// * `key` - The unique identifier for the user
+///
+/// # Returns
+///
+/// A JSON response containing the number of backup codes that were deleted.
+#[utoipa::path(
+    delete,
+    path = "/mfa/totp/backup-codes/{key}",
+    tag = "TOTP",
+    params(
+        ("key" = String, Path, description = "Unique user key")
+    ),
+    responses(
+        (status = 200, description = "Backup codes deleted successfully", body = DeleteBackupCodesResponse),
+        (status = 404, description = "User not found", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError)
+    )
+)]
+async fn delete_backup_codes(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    debug!("Deleting backup codes for user with key: {}", key);
+
+    match mfa_service::delete_backup_codes(State(state), &key).await {
+        Ok(response) => Ok(response),
+        Err(e) => {
+            error!("Failed to delete backup codes for user {}: {:?}", key, e);
             Err(e)
         }
     }

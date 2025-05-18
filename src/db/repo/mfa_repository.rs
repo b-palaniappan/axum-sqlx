@@ -237,7 +237,7 @@ pub async fn save_mfa_backup_codes(
 pub async fn mark_backup_code_as_used(
     pool: &PgPool,
     backup_code_id: i64,
-) -> Result<sqlx::postgres::PgQueryResult, AppError> {
+) -> Result<PgQueryResult, AppError> {
     let now = sqlx::types::chrono::Utc::now();
     match sqlx::query!(
         r#"
@@ -280,7 +280,7 @@ pub async fn get_unused_backup_codes_by_user_id(
         crate::db::entity::mfa::UserMfaBackupCodes,
         r#"
         SELECT * FROM user_mfa_backup_codes
-        WHERE user_id = $1 AND used_at IS NULL
+        WHERE user_id = $1 AND used_at IS NULL AND deleted_at IS NULL
         "#,
         user_id
     )
@@ -293,6 +293,41 @@ pub async fn get_unused_backup_codes_by_user_id(
             Err(AppError::new(
                 ErrorType::InternalServerError,
                 "Failed to retrieve backup codes",
+            ))
+        }
+    }
+}
+
+/// Soft deletes all backup codes for a user by setting the deleted_at timestamp
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool
+/// * `user_id` - The ID of the user whose backup codes to delete
+///
+/// # Returns
+///
+/// A `Result` containing the number of rows affected or an `AppError` on failure
+pub async fn soft_delete_backup_codes(pool: &PgPool, user_id: i64) -> Result<i64, AppError> {
+    let now = Utc::now();
+    match sqlx::query!(
+        r#"
+        UPDATE user_mfa_backup_codes
+        SET deleted_at = $1
+        WHERE user_id = $2 AND deleted_at IS NULL
+        "#,
+        now,
+        user_id
+    )
+    .execute(pool)
+    .await
+    {
+        Ok(result) => Ok(result.rows_affected() as i64),
+        Err(e) => {
+            error!("Failed to soft delete backup codes: {:?}", e);
+            Err(AppError::new(
+                ErrorType::InternalServerError,
+                "Failed to delete backup codes",
             ))
         }
     }

@@ -434,6 +434,42 @@ pub async fn validate_backup_code(
         .into_response())
 }
 
+/// Deletes (soft delete) all backup codes for a user.
+///
+/// This function:
+/// 1. Retrieves the user from the database using their unique key
+/// 2. Soft deletes all backup codes for the user by setting the deleted_at timestamp
+/// 3. Returns the number of backup codes that were deleted
+///
+/// # Arguments
+///
+/// * `state` - The application state containing database connection pools
+/// * `user_key` - The unique identifier for the user
+///
+/// # Returns
+///
+/// Returns a `Result` containing a `Response` with the number of deleted backup codes,
+/// or an `AppError` on failure.
+pub async fn delete_backup_codes(
+    State(state): State<Arc<AppState>>,
+    user_key: &String,
+) -> Result<Response, AppError> {
+    // Get the user
+    let user = users_repository::get_user_by_key(&state.pg_pool, user_key)
+        .await
+        .map_err(|_| AppError::new(ErrorType::NotFound, "User not found"))?;
+
+    // Soft delete all backup codes for the user
+    let deleted_count = mfa_repository::soft_delete_backup_codes(&state.pg_pool, user.id).await?;
+
+    // Return the result
+    Ok((
+        StatusCode::OK,
+        Json(DeleteBackupCodesResponse { deleted_count }),
+    )
+        .into_response())
+}
+
 /// Request to validate a TOTP code
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -480,4 +516,12 @@ pub struct ValidateBackupCodeRequest {
 pub struct ValidateBackupCodeResponse {
     /// Whether the backup code is valid
     pub is_valid: bool,
+}
+
+/// Response after deleting backup codes
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteBackupCodesResponse {
+    /// The number of backup codes that were deleted
+    pub deleted_count: i64,
 }

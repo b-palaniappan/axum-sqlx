@@ -50,7 +50,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin
-          key: ${{ runner.os }}-cargo-bin-sqlx-cli
+          key: ${{ runner.os }}-cargo-bin-sqlx-cli-${{ steps.sqlx_version.outputs.version }}
       - name: Install sqlx-cli
         run: |
           if ! command -v sqlx &> /dev/null; then

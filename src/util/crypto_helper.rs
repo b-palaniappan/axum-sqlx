@@ -44,11 +44,28 @@ use tracing::error;
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,no_run
+/// # use axum_sqlx::config::app_config::AppState;
+/// # use axum_sqlx::util::crypto_helper::hash_password_sign_with_hmac;
+/// # use std::sync::Arc;
+/// #
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// // Create a test state
+/// let encryption_key: [u8; 32] = [0; 32]; // Simplified for example
 /// let state = Arc::new(AppState {
+///     pg_pool: sqlx::postgres::PgPool::connect("postgres://localhost").await?,
+///     redis_pool: bb8_redis::bb8::Pool::builder().build(bb8_redis::RedisConnectionManager::new("redis://localhost")?).await?,
+///     webauthn: webauthn_rs::WebauthnBuilder::new("localhost", &webauthn_rs::prelude::Url::parse("http://localhost").unwrap()).unwrap().build().unwrap(),
 ///     argon_pepper: "some_pepper".to_string(),
 ///     hmac_key: "some_hmac_key".to_string(),
+///     jwt_private_key: "key".to_string(),
+///     jwt_public_key: "key".to_string(),
+///     jwt_expiration: 3600,
+///     jwt_issuer: "test".to_string(),
+///     dummy_hashed_password: "test".to_string(),
+///     encryption_key,
 /// });
+///
 /// let password = "my_secure_password".to_string();
 /// let result = hash_password_sign_with_hmac(&state, &password).await;
 /// match result {
@@ -58,6 +75,8 @@ use tracing::error;
 ///     }
 ///     Err(e) => eprintln!("Error: {}", e),
 /// }
+/// # Ok(())
+/// # }
 /// ```
 pub async fn hash_password_sign_with_hmac(
     state: &Arc<AppState>,
@@ -111,13 +130,32 @@ pub async fn hash_password_sign_with_hmac(
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,no_run
+/// # use axum_sqlx::config::app_config::AppState;
+/// # use axum_sqlx::util::crypto_helper::run_fake_password_hash_check;
+/// # use std::sync::Arc;
+/// #
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// // Create a test state
+/// let encryption_key: [u8; 32] = [0; 32]; // Simplified for example
 /// let state = Arc::new(AppState {
+///     pg_pool: sqlx::postgres::PgPool::connect("postgres://localhost").await?,
+///     redis_pool: bb8_redis::bb8::Pool::builder().build(bb8_redis::RedisConnectionManager::new("redis://localhost")?).await?,
+///     webauthn: webauthn_rs::WebauthnBuilder::new("localhost", &webauthn_rs::prelude::Url::parse("http://localhost").unwrap()).unwrap().build().unwrap(),
 ///     argon_pepper: "some_pepper".to_string(),
+///     hmac_key: "test_key".to_string(),
+///     jwt_private_key: "key".to_string(),
+///     jwt_public_key: "key".to_string(),
+///     jwt_expiration: 3600,
+///     jwt_issuer: "test".to_string(),
 ///     dummy_hashed_password: "$argon2id$v=19$m=65536,t=2,p=1$...".to_string(),
+///     encryption_key,
 /// });
+///
 /// let result = run_fake_password_hash_check(&state).await;
 /// assert!(result.is_err());
+/// # Ok(())
+/// # }
 /// ```
 pub async fn run_fake_password_hash_check(state: &Arc<AppState>) -> Result<Response, AppError> {
     let argon2 = Argon2::new_with_secret(
@@ -168,7 +206,31 @@ pub async fn run_fake_password_hash_check(state: &Arc<AppState>) -> Result<Respo
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,no_run
+/// # use axum_sqlx::config::app_config::AppState;
+/// # use axum_sqlx::util::crypto_helper::verify_password_hash_hmac;
+/// # use std::sync::Arc;
+/// #
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// // Create a test state
+/// let encryption_key: [u8; 32] = [0; 32]; // Simplified for example
+/// let state = Arc::new(AppState {
+///     pg_pool: sqlx::postgres::PgPool::connect("postgres://localhost").await?,
+///     redis_pool: bb8_redis::bb8::Pool::builder().build(bb8_redis::RedisConnectionManager::new("redis://localhost")?).await?,
+///     webauthn: webauthn_rs::WebauthnBuilder::new("localhost", &webauthn_rs::prelude::Url::parse("http://localhost").unwrap()).unwrap().build().unwrap(),
+///     argon_pepper: "some_pepper".to_string(),
+///     hmac_key: "test_key".to_string(),
+///     jwt_private_key: "key".to_string(),
+///     jwt_public_key: "key".to_string(),
+///     jwt_expiration: 3600,
+///     jwt_issuer: "test".to_string(),
+///     dummy_hashed_password: "test".to_string(),
+///     encryption_key,
+/// });
+///
+/// let user_id = 123;
+/// let stored_hmac = vec![1, 2, 3, 4]; // Example HMAC
+///
 /// let result = verify_password_hash_hmac(
 ///     &state,
 ///     &"user_password".to_string(),
@@ -176,10 +238,13 @@ pub async fn run_fake_password_hash_check(state: &Arc<AppState>) -> Result<Respo
 ///     &stored_hmac,
 ///     &user_id,
 /// ).await;
+///
 /// match result {
 ///     Ok(_) => println!("Password and HMAC verified successfully."),
-///     Err(e) => eprintln!("Verification failed: {}", e),
+///     Err(e) => eprintln!("Verification failed: {:?}", e),
 /// }
+/// # Ok(())
+/// # }
 /// ```
 pub async fn verify_password_hash_hmac(
     state: &Arc<AppState>,
@@ -264,14 +329,24 @@ pub async fn verify_password_hash_hmac(
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,no_run
+/// # use axum_sqlx::util::crypto_helper::handle_user_authentication_failed;
+/// # use sqlx::PgPool;
+/// #
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// // Get a connection pool
+/// let pg_pool = PgPool::connect("postgres://localhost").await?;
+/// let user_id = 123;
+///
 /// let result = handle_user_authentication_failed(&pg_pool, &user_id).await;
 /// match result {
 ///     Ok(_) => println!("Failed login attempt recorded."),
-///     Err(e) => eprintln!("Error: {}", e),
+///     Err(e) => eprintln!("Error: {:?}", e),
 /// }
+/// # Ok(())
+/// # }
 /// ```
-async fn handle_user_authentication_failed(
+pub async fn handle_user_authentication_failed(
     pg_pool: &PgPool,
     user_id: &i64,
 ) -> Result<(), AppError> {
@@ -317,7 +392,10 @@ async fn handle_user_authentication_failed(
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,no_run
+/// # use axum_sqlx::util::crypto_helper::aes_gcm_encrypt;
+/// #
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let key: [u8; 32] = [0; 32];
 /// let plaintext = b"Hello, world!";
 /// let result = aes_gcm_encrypt(&key, plaintext).await;
@@ -328,6 +406,8 @@ async fn handle_user_authentication_failed(
 ///     }
 ///     Err(e) => eprintln!("Encryption failed: {}", e),
 /// }
+/// # Ok(())
+/// # }
 /// ```
 pub async fn aes_gcm_encrypt(
     key_byte: &[u8; 32],
@@ -376,7 +456,10 @@ pub async fn aes_gcm_encrypt(
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,no_run
+/// # use axum_sqlx::util::crypto_helper::aes_gcm_decrypt;
+/// #
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let key: [u8; 32] = [0; 32];
 /// let nonce = "Base64EncodedNonce".to_string();
 /// let ciphertext = "Base64EncodedCiphertext".to_string();
@@ -385,6 +468,8 @@ pub async fn aes_gcm_encrypt(
 ///     Ok(plaintext) => println!("Decrypted plaintext: {:?}", plaintext),
 ///     Err(e) => eprintln!("Decryption failed: {}", e),
 /// }
+/// # Ok(())
+/// # }
 /// ```
 pub async fn aes_gcm_decrypt(
     key_byte: &[u8; 32],
@@ -428,11 +513,15 @@ pub async fn aes_gcm_decrypt(
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,no_run
+/// # use axum_sqlx::util::crypto_helper::generate_backup_codes;
+/// #
+/// # async fn example() {
 /// let codes = generate_backup_codes(5, 10).await;
 /// for code in codes {
 ///     println!("{}", code);
 /// }
+/// # }
 /// ```
 pub async fn generate_backup_codes(size: usize, length: usize) -> Vec<String> {
     let alphabet: [char; 52] = [

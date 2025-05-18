@@ -58,13 +58,20 @@ pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Users, sqlx
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```rust,no_run
+/// # use axum_sqlx::db::repo::auth_repository::get_active_user_by_email;
+/// # use sqlx::PgPool;
+/// #
+/// # async fn example() -> Result<(), sqlx::Error> {
+/// let pool = PgPool::connect("postgres://localhost").await?;
 /// let user = get_active_user_by_email(&pool, "example@example.com").await?;
 /// if let Some(user) = user {
 ///     println!("Found active user: {:?}", user);
 /// } else {
 ///     println!("No active user found with the given email.");
 /// }
+/// # Ok(())
+/// # }
 /// ```
 pub async fn get_active_user_by_email(
     pool: &PgPool,

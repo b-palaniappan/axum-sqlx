@@ -32,7 +32,7 @@ openssl rsa -in axum_private.pem -pubout -out axum_public.pem
 - [x] Add logging using tracing.
 - [ ] Add secret manager to store secrets.
 - [x] Rest api client using reqwest.
-- [ ] Unit and Integration testing.
+- [x] Unit and Integration testing.
 - [x] Dockerize the application.
 - [ ] CI/CD pipeline using GitHub Actions.
 
@@ -51,3 +51,20 @@ openssl rsa -in axum_private.pem -pubout -out axum_public.pem
 ### Permissions
 - READ
 - WRITE
+
+## Testing
+### Integration Tests
+To run the integration tests:
+
+```bash
+# Run all tests
+cargo test
+
+# Run specific test
+cargo test test_create_user
+
+# Run tests with output
+cargo test -- --nocapture
+```
+
+Note: Integration tests require a running PostgreSQL database and Redis instance. The tests will use the database connection specified in the `TEST_DATABASE_URL` environment variable, or will fall back to `DATABASE_URL` if not specified.

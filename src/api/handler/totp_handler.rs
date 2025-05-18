@@ -26,9 +26,17 @@ use tracing::{debug, error};
 ///
 /// # Example
 ///
-/// ```rust
-/// let app = Router::new()
-///     .nest("/mfa/totp", totp_routes());
+/// ```rust,no_run
+/// # use axum::Router;
+/// # use axum_sqlx::api::handler::totp_handler::totp_routes;
+/// # use axum_sqlx::AppState;
+/// # use std::sync::Arc;
+/// #
+/// # fn example(state: Arc<AppState>) {
+/// let app: Router = Router::new()
+///     .nest("/mfa/totp", totp_routes())
+///     .with_state(state);
+/// # }
 /// ```
 pub fn totp_routes() -> Router<Arc<AppState>> {
     Router::new()

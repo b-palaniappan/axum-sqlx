@@ -1,5 +1,5 @@
 use crate::api::model::mfa::{
-    BackupCodesResponse, DeleteBackupCodesResponse, TotpResponse, ValidateBackupCodeResponse,
+    BackupCodesResponse, DeleteBackupCodesResponse, DeleteTotpResponse, TotpResponse, ValidateBackupCodeResponse,
 };
 use crate::config::app_config::AppState;
 use crate::db::entity::mfa::TotpSecret;
@@ -470,4 +470,57 @@ pub async fn delete_backup_codes(
         Json(DeleteBackupCodesResponse { deleted_count }),
     )
         .into_response())
+}
+
+/// Deletes (soft delete) the TOTP secret for a user.
+///
+/// This function:
+/// 1. Retrieves the user from the database using their unique key
+/// 2. Soft deletes the user's TOTP secrets by setting the deleted_at timestamp
+/// 3. Returns a success response if the operation was successful
+///
+/// # Arguments
+///
+/// * `state` - The application state containing database connection pools
+/// * `user_key` - The unique identifier for the user
+///
+/// # Returns
+///
+/// Returns a `Result` containing a `Response` with the deletion status,
+/// or an `AppError` on failure.
+pub async fn delete_totp(
+    State(state): State<Arc<AppState>>,
+    user_key: &String,
+) -> Result<Response, AppError> {
+    // Get the user
+    let user = users_repository::get_user_by_key(&state.pg_pool, user_key)
+        .await
+        .map_err(|_| AppError::new(ErrorType::NotFound, "User not found"))?;
+
+    // Deactivate the TOTP secret for the user
+    let result = mfa_repository::deactivate_totp_secret(&state.pg_pool, user.id).await?;
+
+    // Check if any rows were affected
+    if result.rows_affected() > 0 {
+        // Return success response
+        Ok((
+            StatusCode::OK,
+            Json(DeleteTotpResponse {
+                success: true,
+                message: "TOTP authentication disabled successfully".to_string(),
+            }),
+        )
+            .into_response())
+    } else {
+        // Return a success response even if no rows were affected
+        // (idempotent endpoint, maybe TOTP was already disabled)
+        Ok((
+            StatusCode::OK,
+            Json(DeleteTotpResponse {
+                success: true,
+                message: "TOTP authentication was already disabled".to_string(),
+            }),
+        )
+            .into_response())
+    }
 }

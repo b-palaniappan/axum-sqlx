@@ -1,5 +1,5 @@
 use crate::api::model::mfa::{
-    BackupCodesResponse, DeleteBackupCodesResponse, TotpResponse, ValidateBackupCodeRequest,
+    BackupCodesResponse, DeleteBackupCodesResponse, DeleteTotpResponse, TotpResponse, ValidateBackupCodeRequest,
     ValidateBackupCodeResponse, ValidateTotpRequest, ValidateTotpResponse,
 };
 use crate::config::app_config::AppState;
@@ -8,7 +8,7 @@ use crate::service::mfa_service;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use std::sync::Arc;
 use tracing::{debug, error};
@@ -42,6 +42,7 @@ pub fn totp_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/register/{key}", post(totp_register))
         .route("/validate/{key}", post(totp_validate))
+        .route("/{key}", delete(totp_delete))
         .route("/backup-codes/{key}", get(totp_backup_codes))
         .route("/validate-backup/{key}", post(validate_backup_code))
         .route(
@@ -270,6 +271,45 @@ async fn delete_backup_codes(
         Ok(response) => Ok(response),
         Err(e) => {
             error!("Failed to delete backup codes for user {}: {:?}", key, e);
+            Err(e)
+        }
+    }
+}
+
+/// Delete TOTP secret for a user.
+///
+/// This endpoint disables TOTP authentication for a user by soft-deleting their TOTP secret.
+/// It performs a soft delete by setting the deleted_at timestamp, making the TOTP secret unusable
+/// for future validation.
+///
+/// # Path parameters
+///
+/// * `key` - The unique identifier for the user
+///
+/// # Returns
+///
+/// A JSON response indicating whether the TOTP secret was successfully deleted.
+#[utoipa::path(
+    delete,
+    path = "/mfa/totp/{key}",
+    tag = "TOTP Multi-Factor Authentication",
+    params(
+        ("key" = String, Path, description = "Unique user key")
+    ),
+    responses(
+        (status = 200, description = "TOTP secret deleted successfully", body = DeleteTotpResponse),
+        (status = 404, description = "User not found", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError)
+    )
+)]
+async fn totp_delete(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    match mfa_service::delete_totp(State(state), &key).await {
+        Ok(response) => Ok(response),
+        Err(e) => {
+            error!("Failed to delete TOTP secret for user {}: {:?}", key, e);
             Err(e)
         }
     }

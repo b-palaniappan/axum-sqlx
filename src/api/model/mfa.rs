@@ -72,3 +72,15 @@ pub struct DeleteBackupCodesResponse {
     #[schema(example = "10")]
     pub deleted_count: i64,
 }
+
+/// Response after deleting TOTP secret
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteTotpResponse {
+    /// Whether the TOTP secret was successfully deleted
+    #[schema(example = "true")]
+    pub success: bool,
+    /// A message describing the result of the operation
+    #[schema(example = "TOTP authentication disabled successfully")]
+    pub message: String,
+}

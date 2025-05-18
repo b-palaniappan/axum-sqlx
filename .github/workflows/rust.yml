@@ -41,6 +41,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install macOS target
+        run: rustup target add x86_64-apple-darwin
+
       - name: Update DATABASE_URL in .env
         run: |
           if [ -f .env ]; then
@@ -73,11 +76,26 @@ jobs:
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
 
-      - name: Build binaries (release)
+      - name: Build binaries (release, Linux)
         run: cargo build --release
+
+      - name: Build binaries (release, macOS)
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          cp target/release/$(basename $(pwd)) release-assets/$(basename $(pwd))-linux
+          cp target/x86_64-apple-darwin/release/$(basename $(pwd)) release-assets/$(basename $(pwd))-macos
 
       - name: Run tests (release)
         run: cargo test --release
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: release-assets/
 
       - name: Cache cargo dependencies
         uses: actions/cache@v4

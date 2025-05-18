@@ -224,48 +224,70 @@ pub async fn save_mfa_backup_codes(
     Ok(inserted_count)
 }
 
-/// Retrieves the backup codes for a user.
+/// Marks a backup code as used
 ///
 /// # Arguments
 ///
 /// * `pool` - A reference to the PostgreSQL connection pool
-/// * `user_id` - The ID of the user whose backup codes should be retrieved
+/// * `backup_code_id` - The ID of the backup code to mark as used
 ///
 /// # Returns
 ///
-/// A `Result` containing the backup codes or an `AppError` on failure
-pub async fn get_backup_codes(
+/// A `Result` containing the query result or an `AppError` on failure
+pub async fn mark_backup_code_as_used(
     pool: &PgPool,
-    user_id: i64,
-) -> Result<crate::db::entity::mfa::BackupCodes, AppError> {
+    backup_code_id: i64,
+) -> Result<sqlx::postgres::PgQueryResult, AppError> {
+    let now = sqlx::types::chrono::Utc::now();
     match sqlx::query!(
         r#"
-        SELECT backup_code_hash
-        FROM user_mfa_backup_codes
+        UPDATE user_mfa_backup_codes
+        SET used_at = $1
+        WHERE id = $2 AND used_at IS NULL
+        "#,
+        now,
+        backup_code_id
+    )
+    .execute(pool)
+    .await
+    {
+        Ok(result) => Ok(result),
+        Err(e) => {
+            error!("Failed to mark backup code as used: {:?}", e);
+            Err(AppError::new(
+                ErrorType::InternalServerError,
+                "Failed to mark backup code as used",
+            ))
+        }
+    }
+}
+
+/// Retrieves all unused backup codes for a user
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool
+/// * `user_id` - The ID of the user
+///
+/// # Returns
+///
+/// A `Result` containing a vector of backup codes or an `AppError` on failure
+pub async fn get_unused_backup_codes_by_user_id(
+    pool: &PgPool,
+    user_id: i64,
+) -> Result<Vec<crate::db::entity::mfa::UserMfaBackupCodes>, AppError> {
+    match sqlx::query_as!(
+        crate::db::entity::mfa::UserMfaBackupCodes,
+        r#"
+        SELECT * FROM user_mfa_backup_codes
         WHERE user_id = $1 AND used_at IS NULL
         "#,
         user_id
     )
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await
     {
-        Ok(Some(record)) => {
-            // Parse the JSON string back to BackupCodes
-            let backup_codes: crate::db::entity::mfa::BackupCodes =
-                serde_json::from_str(&record.backup_code_hash).map_err(|e| {
-                    error!("Failed to parse backup codes: {:?}", e);
-                    AppError::new(
-                        ErrorType::InternalServerError,
-                        "Failed to process backup codes",
-                    )
-                })?;
-
-            Ok(backup_codes)
-        }
-        Ok(None) => Err(AppError::new(
-            ErrorType::NotFound,
-            "No backup codes found for this user",
-        )),
+        Ok(records) => Ok(records),
         Err(e) => {
             error!("Failed to get backup codes: {:?}", e);
             Err(AppError::new(

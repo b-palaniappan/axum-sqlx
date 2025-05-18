@@ -4,17 +4,19 @@ use crate::db::repo::{mfa_repository, users_repository};
 use crate::error::error_model::{AppError, ErrorType};
 use crate::util::crypto_helper;
 use crate::util::crypto_helper::hash_password_sign_with_hmac;
+use argon2::PasswordVerifier;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine;
+use futures::future::join_all;
+use hmac::Mac;
 use rand_chacha::rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use futures::future::join_all;
 use totp_rs::{Algorithm, TOTP};
 use tracing::error;
 use utoipa::ToSchema;
@@ -332,6 +334,106 @@ async fn generate_totp_secret() -> [u8; 32] {
     secret
 }
 
+/// Validates a backup code provided by the user.
+///
+/// This function:
+/// 1. Retrieves the user from the database
+/// 2. Gets the user's unused backup codes
+/// 3. Attempts to verify the provided backup code against the stored hashes
+/// 4. If valid, marks the backup code as used
+///
+/// # Arguments
+///
+/// * `state` - The application state containing database connection pools
+/// * `user_key` - The unique identifier for the user
+/// * `backup_code` - The backup code provided by the user
+///
+/// # Returns
+///
+/// Returns a `Result` containing a `Response` with the validation result,
+/// or an `AppError` on failure.
+pub async fn validate_backup_code(
+    State(state): State<Arc<AppState>>,
+    user_key: &String,
+    backup_code: &String,
+) -> Result<Response, AppError> {
+    // Get the user
+    let user = users_repository::get_user_by_key(&state.pg_pool, user_key)
+        .await
+        .map_err(|_| AppError::new(ErrorType::NotFound, "User not found"))?;
+
+    // Get all unused backup codes for the user
+    let backup_codes =
+        mfa_repository::get_unused_backup_codes_by_user_id(&state.pg_pool, user.id).await?;
+
+    if backup_codes.is_empty() {
+        return Ok((
+            StatusCode::OK,
+            Json(ValidateBackupCodeResponse { is_valid: false }),
+        )
+            .into_response());
+    }
+
+    // Try each backup code
+    for code_record in backup_codes {
+        // Parse the hash to check if it's a valid Argon2 hash
+        if let Ok(parsed_hash) = argon2::PasswordHash::new(&code_record.backup_code_hash) {
+            // Setup Argon2 with the application's pepper
+            let argon2 = argon2::Argon2::new_with_secret(
+                &state.argon_pepper.as_bytes(),
+                argon2::Algorithm::Argon2id,
+                argon2::Version::V0x13,
+                argon2::Params::default(),
+            )
+            .map_err(|_| {
+                error!("Failed to initialize Argon2");
+                AppError::new(
+                    ErrorType::InternalServerError,
+                    "Failed to process backup code verification",
+                )
+            })?;
+
+            // Verify the backup code against the stored hash
+            if argon2
+                .verify_password(backup_code.as_bytes(), &parsed_hash)
+                .is_ok()
+            {
+                // Verify the HMAC for tamper protection
+                type HmacSha512 = hmac::Hmac<sha2::Sha512>;
+                let mut mac = <HmacSha512 as hmac::Mac>::new_from_slice(&state.hmac_key.as_bytes())
+                    .map_err(|_| {
+                        error!("Failed to initialize HMAC");
+                        AppError::new(
+                            ErrorType::InternalServerError,
+                            "Failed to process backup code verification",
+                        )
+                    })?;
+
+                mac.update(code_record.backup_code_hash.as_bytes());
+                if mac.verify_slice(&code_record.backup_code_hmac).is_ok() {
+                    // Code is valid - mark it as used
+                    mfa_repository::mark_backup_code_as_used(&state.pg_pool, code_record.id)
+                        .await?;
+
+                    // Return success
+                    return Ok((
+                        StatusCode::OK,
+                        Json(ValidateBackupCodeResponse { is_valid: true }),
+                    )
+                        .into_response());
+                }
+            }
+        }
+    }
+
+    // No valid backup code found
+    Ok((
+        StatusCode::OK,
+        Json(ValidateBackupCodeResponse { is_valid: false }),
+    )
+        .into_response())
+}
+
 /// Request to validate a TOTP code
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -363,4 +465,19 @@ pub struct ValidateTotpResponse {
 pub struct BackupCodesResponse {
     /// List of backup codes
     pub backup_codes: Vec<String>,
+}
+
+/// Request to validate a backup code
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidateBackupCodeRequest {
+    pub backup_code: String,
+}
+
+/// Response after validating a backup code
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidateBackupCodeResponse {
+    /// Whether the backup code is valid
+    pub is_valid: bool,
 }

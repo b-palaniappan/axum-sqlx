@@ -2,7 +2,8 @@ use crate::config::app_config::AppState;
 use crate::error::error_model::{ApiError, AppError};
 use crate::service::mfa_service;
 use crate::service::mfa_service::{
-    BackupCodesResponse, TotpResponse, ValidateTotpRequest, ValidateTotpResponse,
+    BackupCodesResponse, TotpResponse, ValidateBackupCodeRequest, ValidateBackupCodeResponse,
+    ValidateTotpRequest, ValidateTotpResponse,
 };
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -20,6 +21,7 @@ use tracing::{debug, error};
 /// - POST /register/{key} - Register a new TOTP device for a user
 /// - POST /validate/{key} - Validate a TOTP code
 /// - GET /backup-codes/{key} - Generate backup codes for a user
+/// - POST /validate-backup/{key} - Validate a backup code
 ///
 /// # Example
 ///
@@ -32,6 +34,7 @@ pub fn totp_routes() -> Router<Arc<AppState>> {
         .route("/register/{key}", post(totp_register))
         .route("/validate/{key}", post(totp_validate))
         .route("/backup-codes/{key}", get(totp_backup_codes))
+        .route("/validate-backup/{key}", post(validate_backup_code))
 }
 
 /// Register a new TOTP device for a user.
@@ -158,6 +161,62 @@ async fn totp_backup_codes(
         Ok(codes) => Ok(codes),
         Err(e) => {
             error!("Failed to generate backup codes for user {}: {:?}", key, e);
+            Err(e)
+        }
+    }
+}
+
+/// Validates a backup code for a user.
+///
+/// This endpoint checks if the provided backup code is valid for the user
+/// identified by the given key. Backup codes are used as a fallback when
+/// TOTP codes are unavailable.
+///
+/// # Path parameters
+///
+/// * `key` - The unique identifier for the user.
+///
+/// # Request body
+///
+/// A JSON object containing the backup code to validate.
+///
+/// # Returns
+///
+/// Returns a `Result` containing:
+/// - A success response with validation details if the backup code is valid.
+/// - An `AppError` if the user is not found or validation fails.
+///
+/// # Errors
+///
+/// This function returns an `AppError` if:
+/// - The user cannot be found in the database.
+/// - The provided backup code is invalid.
+/// - An internal server error occurs during validation.
+#[utoipa::path(
+    post,
+    path = "/mfa/totp/validate-backup/{key}",
+    tag = "TOTP",
+    params(
+        ("key" = String, Path, description = "User's unique key")
+    ),
+    request_body = ValidateBackupCodeRequest,
+    responses(
+        (status = 200, description = "Backup code validation result", body = ValidateBackupCodeResponse),
+        (status = 404, description = "User not found", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError)
+    )
+)]
+async fn validate_backup_code(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    Json(request): Json<ValidateBackupCodeRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    debug!("Validating backup code for user with key: {}", key);
+
+    match mfa_service::validate_backup_code(State(state), &key, &request.backup_code).await {
+        Ok(response) => Ok(response),
+        Err(e) => {
+            error!("Failed to validate backup code for user {}: {:?}", key, e);
             Err(e)
         }
     }

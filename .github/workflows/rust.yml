@@ -46,8 +46,16 @@ jobs:
           else
             echo "DATABASE_URL=postgres://postgres:postgres@localhost:5432/test_db" >> .env
           fi
+      - name: Cache cargo bin
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: ${{ runner.os }}-cargo-bin-sqlx-cli
       - name: Install sqlx-cli
-        run: cargo install sqlx-cli --no-default-features --features postgres
+        run: |
+          if ! command -v sqlx &> /dev/null; then
+            cargo install sqlx-cli --no-default-features --features postgres
+          fi
       - name: Wait for Postgres
         run: |
           for i in {1..10}; do

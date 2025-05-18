@@ -1,9 +1,4 @@
 name: Rust Build and Test
-# This workflow will build and test Rust code using GitHub Actions.
-# It will run on pushes and pull requests to the main branch.
-# It uses the latest version of Ubuntu as the runner.
-# The workflow caches the cargo registry and git files to speed up builds.
-# TODO: work in progress
 
 on:
   push:
@@ -33,12 +28,9 @@ jobs:
           --health-retries=5
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/test_db
-      CARGO_TERM_COLOR: always
-    strategy:
-      matrix:
-        BUILD_TARGET: [release]
     steps:
       - uses: actions/checkout@v4
+
       - name: Update DATABASE_URL in .env
         run: |
           if [ -f .env ]; then
@@ -46,31 +38,38 @@ jobs:
           else
             echo "DATABASE_URL=postgres://postgres:postgres@localhost:5432/test_db" >> .env
           fi
-      - name: Cache cargo bin
+
+      - name: Cache cargo bin (sqlx-cli)
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin
-          key: ${{ runner.os }}-cargo-bin-sqlx-cli-${{ steps.sqlx_version.outputs.version }}
+          key: ${{ runner.os }}-cargo-bin-sqlx-cli
+
       - name: Install sqlx-cli
         run: |
           if ! command -v sqlx &> /dev/null; then
             cargo install sqlx-cli --no-default-features --features postgres
           fi
+
       - name: Wait for Postgres
         run: |
           for i in {1..10}; do
             pg_isready -h localhost -U postgres && break
             sleep 2
           done
+
       - name: Run sqlx migrations
         run: sqlx migrate run
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
-      - name: Build binaries in "${{ matrix.BUILD_TARGET }}" mode
-        run: cargo build --profile ${{ matrix.BUILD_TARGET }}
-      - name: Run tests in "${{ matrix.BUILD_TARGET }}" mode
-        run: cargo test --profile ${{ matrix.BUILD_TARGET }}
-      - name: Cache
+
+      - name: Build binaries (release)
+        run: cargo build --release
+
+      - name: Run tests (release)
+        run: cargo test --release
+
+      - name: Cache cargo dependencies
         uses: actions/cache@v4
         with:
           path: |

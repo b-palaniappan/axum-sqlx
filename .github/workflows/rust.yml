@@ -5,13 +5,17 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  release:
+    types: [ created ]
 
 env:
   CARGO_TERM_COLOR: always
 
+# This workflow will install Rust, run tests, and build the project.
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Creates PostgresSQL and Valkey containers for integration testing.
     services:
       postgres:
         image: postgres:17
@@ -87,3 +91,25 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+  release:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/axum-sqlx
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

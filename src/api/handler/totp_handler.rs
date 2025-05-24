@@ -1,6 +1,7 @@
 use crate::api::model::mfa::{
-    BackupCodesResponse, DeleteBackupCodesResponse, DeleteTotpResponse, TotpResponse, ValidateBackupCodeRequest,
-    ValidateBackupCodeResponse, ValidateTotpRequest, ValidateTotpResponse,
+    BackupCodesResponse, DeleteBackupCodesResponse, DeleteTotpResponse, TotpResponse,
+    ValidateBackupCodeRequest, ValidateBackupCodeResponse, ValidateTotpRequest,
+    ValidateTotpResponse,
 };
 use crate::config::app_config::AppState;
 use crate::error::error_model::{ApiError, AppError};

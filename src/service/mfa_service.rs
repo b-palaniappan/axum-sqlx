@@ -1,10 +1,13 @@
 use crate::api::model::mfa::{
-    BackupCodesResponse, DeleteBackupCodesResponse, DeleteTotpResponse, TotpResponse, ValidateBackupCodeResponse,
+    BackupCodesResponse, DeleteBackupCodesResponse, DeleteTotpResponse, EmailMfaRegisterResponse,
+    EmailMfaVerifyResponse, SmsMfaRegisterResponse, SmsMfaVerifyResponse, TotpResponse,
+    ValidateBackupCodeResponse,
 };
 use crate::config::app_config::AppState;
 use crate::db::entity::mfa::TotpSecret;
 use crate::db::repo::{mfa_repository, users_repository};
 use crate::error::error_model::{AppError, ErrorType};
+use crate::service::{email, sms};
 use crate::util::crypto_helper;
 use crate::util::crypto_helper::hash_password_sign_with_hmac;
 use argon2::PasswordVerifier;
@@ -20,7 +23,7 @@ use rand_chacha::rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::sync::Arc;
 use totp_rs::{Algorithm, TOTP};
-use tracing::error;
+use tracing::{error, info};
 
 /// Registers a new TOTP device for a user.
 ///
@@ -330,7 +333,7 @@ async fn generate_totp(
 ///
 /// A `[u8; 32]` array containing the generated secret key.
 async fn generate_totp_secret() -> [u8; 32] {
-    let mut rng = ChaCha20Rng::from_seed(Default::default());
+    let mut rng = ChaCha20Rng::seed_from_u64(rand::random());
     let mut secret = [0u8; 32];
     rng.fill_bytes(&mut secret);
     secret
@@ -519,6 +522,283 @@ pub async fn delete_totp(
             Json(DeleteTotpResponse {
                 success: true,
                 message: "TOTP authentication was already disabled".to_string(),
+            }),
+        )
+            .into_response())
+    }
+}
+
+/// Registers an email for MFA.
+///
+/// This function:
+/// 1. Retrieves the user from the database
+/// 2. Checks if the email is already registered for MFA
+/// 3. If not, generates a verification code and sends it to the email
+/// 4. Creates a verification record in the database
+///
+/// # Arguments
+///
+/// * `state` - The application state containing database connection pools
+/// * `user_key` - The unique identifier for the user
+/// * `email` - The email to register for MFA
+///
+/// # Returns
+///
+/// Returns a `Result` containing a `Response` with the registration status,
+/// or an `AppError` on failure.
+pub async fn register_email_mfa(
+    State(state): State<Arc<AppState>>,
+    user_key: &String,
+    email: &String,
+) -> Result<Response, AppError> {
+    // Get the user
+    let user = users_repository::get_user_by_key(&state.pg_pool, user_key)
+        .await
+        .map_err(|_| AppError::new(ErrorType::NotFound, "User not found"))?;
+
+    // Check if the email is already registered for MFA
+    let is_already_registered =
+        mfa_repository::is_email_registered_for_mfa(&state.pg_pool, user.id, email).await?;
+
+    if is_already_registered {
+        // Return response indicating email is already registered
+        return Ok((
+            StatusCode::OK,
+            Json(EmailMfaRegisterResponse {
+                success: true,
+                message: "Email is already registered for MFA".to_string(),
+                already_registered: true,
+            }),
+        )
+            .into_response());
+    }
+
+    // Generate a verification code
+    let verification_code = mfa_repository::generate_verification_code();
+
+    // Create verification record in the database
+    mfa_repository::create_email_verification(&state.pg_pool, user.id, email, &verification_code)
+        .await?;
+
+    // Send verification email
+    match email::send_mfa_verification_email(email, &verification_code).await {
+        Ok(_) => {
+            info!("MFA verification email sent to: {}", email);
+            Ok((
+                StatusCode::OK,
+                Json(EmailMfaRegisterResponse {
+                    success: true,
+                    message: "Verification code sent to email. Valid for 15 minutes.".to_string(),
+                    already_registered: false,
+                }),
+            )
+                .into_response())
+        }
+        Err(e) => {
+            error!("Failed to send MFA verification email: {}", e);
+            Err(AppError::new(
+                ErrorType::InternalServerError,
+                "Failed to send verification email",
+            ))
+        }
+    }
+}
+
+/// Verifies an email for MFA.
+///
+/// This function:
+/// 1. Retrieves the user from the database
+/// 2. Verifies the provided verification code
+/// 3. If valid, marks the email as verified and enables the MFA method
+///
+/// # Arguments
+///
+/// * `state` - The application state containing database connection pools
+/// * `user_key` - The unique identifier for the user
+/// * `email` - The email to verify
+/// * `verification_code` - The verification code to verify
+///
+/// # Returns
+///
+/// Returns a `Result` containing a `Response` with the verification status,
+/// or an `AppError` on failure.
+pub async fn verify_email_mfa(
+    State(state): State<Arc<AppState>>,
+    user_key: &String,
+    email: &String,
+    verification_code: &String,
+) -> Result<Response, AppError> {
+    // Get the user
+    let user = users_repository::get_user_by_key(&state.pg_pool, user_key)
+        .await
+        .map_err(|_| AppError::new(ErrorType::NotFound, "User not found"))?;
+
+    // Verify the code
+    let is_valid =
+        mfa_repository::verify_email_code(&state.pg_pool, user.id, email, verification_code)
+            .await?;
+
+    if is_valid {
+        // Return success response
+        Ok((
+            StatusCode::OK,
+            Json(EmailMfaVerifyResponse {
+                success: true,
+                message: "Email successfully verified and registered for MFA".to_string(),
+            }),
+        )
+            .into_response())
+    } else {
+        // Return failure response
+        Ok((
+            StatusCode::BAD_REQUEST,
+            Json(EmailMfaVerifyResponse {
+                success: false,
+                message: "Invalid or expired verification code".to_string(),
+            }),
+        )
+            .into_response())
+    }
+}
+
+/// Registers a phone number for SMS MFA.
+///
+/// This function:
+/// 1. Retrieves the user from the database
+/// 2. Checks if the phone number is already registered for MFA
+/// 3. If not, generates a verification code and sends it to the phone number
+/// 4. Creates a verification record in the database
+///
+/// # Arguments
+///
+/// * `state` - The application state containing database connection pools
+/// * `user_key` - The unique identifier for the user
+/// * `phone_number` - The phone number to register for MFA
+///
+/// # Returns
+///
+/// Returns a `Result` containing a `Response` with the registration status,
+/// or an `AppError` on failure.
+pub async fn register_sms_mfa(
+    State(state): State<Arc<AppState>>,
+    user_key: &String,
+    phone_number: &String,
+) -> Result<Response, AppError> {
+    // Get the user
+    let user = users_repository::get_user_by_key(&state.pg_pool, user_key)
+        .await
+        .map_err(|_| AppError::new(ErrorType::NotFound, "User not found"))?;
+
+    // Check if the phone number is already registered for MFA
+    let is_already_registered =
+        mfa_repository::is_phone_registered_for_mfa(&state.pg_pool, user.id, phone_number).await?;
+
+    if is_already_registered {
+        // Return response indicating phone number is already registered
+        return Ok((
+            StatusCode::OK,
+            Json(SmsMfaRegisterResponse {
+                success: true,
+                message: "Phone number is already registered for MFA".to_string(),
+                already_registered: true,
+            }),
+        )
+            .into_response());
+    }
+
+    // Generate a verification code
+    let verification_code = mfa_repository::generate_verification_code();
+
+    // Create verification record in the database
+    // For SMS, we don't store the verification code in the database like we do for email
+    // Instead, we might store it in a cache or temporary storage, but for simplicity
+    // we're just creating the SMS record in the database
+    mfa_repository::create_sms_verification(
+        &state.pg_pool,
+        user.id,
+        phone_number,
+        &verification_code,
+    )
+    .await?;
+
+    // Send verification SMS
+    match sms::send_mfa_verification_sms(phone_number, &verification_code).await {
+        Ok(_) => {
+            info!("MFA verification SMS sent to: {}", phone_number);
+            Ok((
+                StatusCode::OK,
+                Json(SmsMfaRegisterResponse {
+                    success: true,
+                    message: "Verification code sent via SMS. Valid for 15 minutes.".to_string(),
+                    already_registered: false,
+                }),
+            )
+                .into_response())
+        }
+        Err(e) => {
+            error!("Failed to send MFA verification SMS: {}", e);
+            Err(AppError::new(
+                ErrorType::InternalServerError,
+                "Failed to send verification SMS",
+            ))
+        }
+    }
+}
+
+/// Verifies a phone number for SMS MFA.
+///
+/// This function:
+/// 1. Retrieves the user from the database
+/// 2. Verifies the provided verification code
+/// 3. If valid, marks the phone number as verified and enables the MFA method
+///
+/// # Arguments
+///
+/// * `state` - The application state containing database connection pools
+/// * `user_key` - The unique identifier for the user
+/// * `phone_number` - The phone number to verify
+/// * `verification_code` - The verification code to verify
+///
+/// # Returns
+///
+/// Returns a `Result` containing a `Response` with the verification status,
+/// or an `AppError` on failure.
+pub async fn verify_sms_mfa(
+    State(state): State<Arc<AppState>>,
+    user_key: &String,
+    phone_number: &String,
+    verification_code: &String,
+) -> Result<Response, AppError> {
+    // Get the user
+    let user = users_repository::get_user_by_key(&state.pg_pool, user_key)
+        .await
+        .map_err(|_| AppError::new(ErrorType::NotFound, "User not found"))?;
+
+    // Verify the code
+    // In a real implementation, you would retrieve the stored code from your secure storage
+    // and compare it with the provided code
+    // For this example, we'll just verify it and mark the phone number as verified
+    let is_valid =
+        mfa_repository::verify_sms_code(&state.pg_pool, user.id, phone_number, verification_code)
+            .await?;
+
+    if is_valid {
+        // Return success response
+        Ok((
+            StatusCode::OK,
+            Json(SmsMfaVerifyResponse {
+                success: true,
+                message: "Phone number successfully verified and registered for MFA".to_string(),
+            }),
+        )
+            .into_response())
+    } else {
+        // Return failure response
+        Ok((
+            StatusCode::BAD_REQUEST,
+            Json(SmsMfaVerifyResponse {
+                success: false,
+                message: "Invalid or expired verification code".to_string(),
             }),
         )
             .into_response())

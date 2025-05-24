@@ -1,4 +1,6 @@
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use utoipa::ToSchema;
 use validator::Validate;
 
@@ -83,4 +85,139 @@ pub struct DeleteTotpResponse {
     /// A message describing the result of the operation
     #[schema(example = "TOTP authentication disabled successfully")]
     pub message: String,
+}
+
+/// Request to register Email MFA
+#[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailMfaRegisterRequest {
+    #[validate(email(message = "Invalid email format"))]
+    #[schema(example = "user@example.com")]
+    pub email: String,
+}
+
+/// Response after requesting Email MFA registration
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailMfaRegisterResponse {
+    /// Whether verification code was sent successfully
+    #[schema(example = "true")]
+    pub success: bool,
+    /// A message describing the result of the operation
+    #[schema(example = "Verification code sent to email. Valid for 15 minutes.")]
+    pub message: String,
+    /// Whether the provided email is already registered for MFA
+    #[schema(example = "false")]
+    pub already_registered: bool,
+}
+
+/// Request to verify Email MFA registration
+#[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailMfaVerifyRequest {
+    #[validate(email(message = "Invalid email format"))]
+    #[schema(example = "user@example.com")]
+    pub email: String,
+
+    #[validate(length(
+        min = 6,
+        max = 6,
+        message = "Verification code must be exactly 6 digits"
+    ))]
+    #[schema(example = "123456")]
+    pub verification_code: String,
+}
+
+/// Response after verifying Email MFA registration
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailMfaVerifyResponse {
+    /// Whether the verification was successful
+    #[schema(example = "true")]
+    pub success: bool,
+    /// A message describing the result of the operation
+    #[schema(example = "Email successfully verified and registered for MFA")]
+    pub message: String,
+}
+
+/// Request to register SMS MFA
+static PHONE_NUMBER_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\+?[0-9]+$").unwrap());
+
+#[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SmsMfaRegisterRequest {
+    #[validate(
+        length(min = 10, max = 15, message = "Phone number must be between 10 and 15 digits"),
+        regex(path = *PHONE_NUMBER_REGEX, message = "Phone number must contain only digits and optionally start with +")
+    )]
+    #[schema(example = "+14155552671")]
+    pub phone_number: String,
+}
+
+/// Response after requesting SMS MFA registration
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SmsMfaRegisterResponse {
+    /// Whether verification code was sent successfully
+    #[schema(example = "true")]
+    pub success: bool,
+    /// A message describing the result of the operation
+    #[schema(example = "Verification code sent via SMS. Valid for 15 minutes.")]
+    pub message: String,
+    /// Whether the provided phone number is already registered for MFA
+    #[schema(example = "false")]
+    pub already_registered: bool,
+}
+
+/// Request to verify SMS MFA registration
+#[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SmsMfaVerifyRequest {
+    #[validate(
+        length(min = 10, max = 15, message = "Phone number must be between 10 and 15 digits"),
+        regex(path = *PHONE_NUMBER_REGEX, message = "Phone number must contain only digits and optionally start with +")
+    )]
+    #[schema(example = "+14155552671")]
+    pub phone_number: String,
+
+    #[validate(length(
+        min = 6,
+        max = 6,
+        message = "Verification code must be exactly 6 digits"
+    ))]
+    #[schema(example = "123456")]
+    pub verification_code: String,
+}
+
+/// Response after verifying SMS MFA registration
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SmsMfaVerifyResponse {
+    /// Whether the verification was successful
+    #[schema(example = "true")]
+    pub success: bool,
+    /// A message describing the result of the operation
+    #[schema(example = "Phone number successfully verified and registered for MFA")]
+    pub message: String,
+}
+
+/// Request to validate MFA during login
+#[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidateMfaRequest {
+    #[validate(length(min = 6, max = 8, message = "MFA code must be between 6 and 8 digits"))]
+    #[schema(example = "123456")]
+    pub code: String,
+
+    #[schema(example = "EMAIL")]
+    pub method: String,
+}
+
+/// Response after validating MFA during login
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidateMfaResponse {
+    /// Whether the MFA code is valid
+    #[schema(example = "true")]
+    pub is_valid: bool,
 }

@@ -74,6 +74,9 @@ nanoid = "^0"
 base64 = "^0"
 uuid = { version = "^1", features = ["v4"] }
 futures = "^0"
+regex = "^1"
+chrono = "^0"
+rand = "^0"
 
 # For testing
 [dev-dependencies]

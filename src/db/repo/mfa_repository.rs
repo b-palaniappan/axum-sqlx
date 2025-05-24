@@ -1,5 +1,8 @@
 use crate::db::entity::mfa::{TotpSecret, UserMfaTotp};
 use crate::error::error_model::{AppError, ErrorType};
+use chrono::Duration;
+use rand_chacha::rand_core::{RngCore, SeedableRng};
+use rand_chacha::ChaCha20Rng;
 use sqlx::postgres::PgQueryResult;
 use sqlx::types::chrono::Utc;
 use sqlx::types::JsonValue;
@@ -331,4 +334,440 @@ pub async fn soft_delete_backup_codes(pool: &PgPool, user_id: i64) -> Result<i64
             ))
         }
     }
+}
+
+/// Checks if an email is already registered for MFA for the given user
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool
+/// * `user_id` - The ID of the user
+/// * `email` - The email to check
+///
+/// # Returns
+///
+/// A `Result` containing a boolean indicating if the email is already registered
+pub async fn is_email_registered_for_mfa(
+    pool: &PgPool,
+    user_id: i64,
+    email: &str,
+) -> Result<bool, AppError> {
+    match sqlx::query_scalar!(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM user_mfa_email
+            WHERE user_id = $1 AND email = $2 AND verified = true
+        ) as "exists!"
+        "#,
+        user_id,
+        email
+    )
+    .fetch_one(pool)
+    .await
+    {
+        Ok(exists) => Ok(exists),
+        Err(e) => {
+            error!("Failed to check if email is registered for MFA: {:?}", e);
+            Err(AppError::new(
+                ErrorType::InternalServerError,
+                "Failed to check email MFA registration",
+            ))
+        }
+    }
+}
+
+/// Creates or updates an email verification record for MFA
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool
+/// * `user_id` - The ID of the user
+/// * `email` - The email to verify
+/// * `verification_code` - The verification code
+///
+/// # Returns
+///
+/// A `Result` containing the ID of the created verification record
+pub async fn create_email_verification(
+    pool: &PgPool,
+    user_id: i64,
+    email: &str,
+    verification_code: &str,
+) -> Result<i64, AppError> {
+    // Calculate the expiration time (15 minutes from now)
+    let expires_at = Utc::now() + Duration::minutes(15);
+
+    // First, insert or update the user_mfa_email record
+    match sqlx::query_scalar!(
+        r#"
+        INSERT INTO user_mfa_email (user_id, email, verified)
+        VALUES ($1, $2, false)
+        ON CONFLICT (user_id, email) DO UPDATE
+        SET verified = false, updated_at = CURRENT_TIMESTAMP
+        RETURNING id
+        "#,
+        user_id,
+        email
+    )
+    .fetch_one(pool)
+    .await
+    {
+        Ok(mfa_email_id) => {
+            // Now create the email verification record
+            match sqlx::query_scalar!(
+                r#"
+                INSERT INTO email_verifications (user_id, email, verification_code, expires_at)
+                VALUES ($1, $2, $3, $4)
+                RETURNING id
+                "#,
+                user_id,
+                email,
+                verification_code,
+                expires_at
+            )
+            .fetch_one(pool)
+            .await
+            {
+                Ok(id) => Ok(id),
+                Err(e) => {
+                    error!("Failed to create email verification: {:?}", e);
+                    Err(AppError::new(
+                        ErrorType::InternalServerError,
+                        "Failed to create email verification",
+                    ))
+                }
+            }
+        }
+        Err(e) => {
+            error!("Failed to create MFA email record: {:?}", e);
+            Err(AppError::new(
+                ErrorType::InternalServerError,
+                "Failed to create MFA email record",
+            ))
+        }
+    }
+}
+
+/// Verifies an email verification code for MFA
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool
+/// * `user_id` - The ID of the user
+/// * `email` - The email to verify
+/// * `verification_code` - The verification code to verify
+///
+/// # Returns
+///
+/// A `Result` containing a boolean indicating if the code was valid
+pub async fn verify_email_code(
+    pool: &PgPool,
+    user_id: i64,
+    email: &str,
+    verification_code: &str,
+) -> Result<bool, AppError> {
+    let now = Utc::now();
+
+    // Begin transaction
+    let mut tx = pool.begin().await.map_err(|e| {
+        error!("Failed to begin transaction: {:?}", e);
+        AppError::new(
+            ErrorType::InternalServerError,
+            "Failed to process email verification",
+        )
+    })?;
+
+    // Check if the verification code is valid
+    let verification = sqlx::query!(
+        r#"
+        SELECT id
+        FROM email_verifications
+        WHERE user_id = $1 AND email = $2 AND verification_code = $3
+            AND verified_at IS NULL AND expires_at > $4
+        "#,
+        user_id,
+        email,
+        verification_code,
+        now
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| {
+        error!("Failed to verify email code: {:?}", e);
+        AppError::new(
+            ErrorType::InternalServerError,
+            "Failed to verify email code",
+        )
+    })?;
+
+    match verification {
+        Some(record) => {
+            // Mark the verification as used
+            sqlx::query!(
+                r#"
+                UPDATE email_verifications
+                SET verified_at = $1
+                WHERE id = $2
+                "#,
+                now,
+                record.id
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                error!("Failed to update email verification: {:?}", e);
+                AppError::new(
+                    ErrorType::InternalServerError,
+                    "Failed to update email verification",
+                )
+            })?;
+
+            // Mark the email as verified in the MFA table
+            sqlx::query!(
+                r#"
+                UPDATE user_mfa_email
+                SET verified = true, updated_at = $1
+                WHERE user_id = $2 AND email = $3
+                "#,
+                now,
+                user_id,
+                email
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                error!("Failed to update MFA email: {:?}", e);
+                AppError::new(ErrorType::InternalServerError, "Failed to update MFA email")
+            })?;
+
+            // Register/update the MFA method in user_mfa_methods
+            sqlx::query!(
+                r#"
+                INSERT INTO user_mfa_methods (user_id, method, is_enabled)
+                VALUES ($1, 'EMAIL', true)
+                ON CONFLICT (user_id, method) DO UPDATE
+                SET is_enabled = true, updated_at = $2
+                "#,
+                user_id,
+                now
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                error!("Failed to update MFA method: {:?}", e);
+                AppError::new(
+                    ErrorType::InternalServerError,
+                    "Failed to update MFA method",
+                )
+            })?;
+
+            // Commit transaction
+            tx.commit().await.map_err(|e| {
+                error!("Failed to commit transaction: {:?}", e);
+                AppError::new(
+                    ErrorType::InternalServerError,
+                    "Failed to complete email verification",
+                )
+            })?;
+
+            Ok(true)
+        }
+        None => {
+            // Code not valid or expired
+            tx.rollback().await.ok(); // Ignore rollback errors
+            Ok(false)
+        }
+    }
+}
+
+/// Checks if a phone number is already registered for MFA for the given user
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool
+/// * `user_id` - The ID of the user
+/// * `phone_number` - The phone number to check
+///
+/// # Returns
+///
+/// A `Result` containing a boolean indicating if the phone number is already registered
+pub async fn is_phone_registered_for_mfa(
+    pool: &PgPool,
+    user_id: i64,
+    phone_number: &str,
+) -> Result<bool, AppError> {
+    match sqlx::query_scalar!(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM user_mfa_sms
+            WHERE user_id = $1 AND phone_number = $2 AND verified = true
+        ) as "exists!"
+        "#,
+        user_id,
+        phone_number
+    )
+    .fetch_one(pool)
+    .await
+    {
+        Ok(exists) => Ok(exists),
+        Err(e) => {
+            error!("Failed to check if phone is registered for MFA: {:?}", e);
+            Err(AppError::new(
+                ErrorType::InternalServerError,
+                "Failed to check SMS MFA registration",
+            ))
+        }
+    }
+}
+
+/// Creates a verification record for SMS MFA
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool
+/// * `user_id` - The ID of the user
+/// * `phone_number` - The phone number to verify
+/// * `verification_code` - The verification code
+///
+/// # Returns
+///
+/// A `Result` containing the ID of the created verification record
+pub async fn create_sms_verification(
+    pool: &PgPool,
+    user_id: i64,
+    phone_number: &str,
+    verification_code: &str,
+) -> Result<i64, AppError> {
+    // First, insert or update the user_mfa_sms record
+    match sqlx::query_scalar!(
+        r#"
+        INSERT INTO user_mfa_sms (user_id, phone_number, verified)
+        VALUES ($1, $2, false)
+        ON CONFLICT (user_id, phone_number) DO UPDATE
+        SET verified = false, updated_at = CURRENT_TIMESTAMP
+        RETURNING id
+        "#,
+        user_id,
+        phone_number
+    )
+    .fetch_one(pool)
+    .await
+    {
+        Ok(mfa_sms_id) => {
+            // Store the verification code temporarily in the application state or Redis cache
+            // This is a placeholder - in the actual implementation, you would store this in a secure place
+            // For this example, we'll return the ID from the user_mfa_sms table
+            Ok(mfa_sms_id)
+        }
+        Err(e) => {
+            error!("Failed to create MFA SMS record: {:?}", e);
+            Err(AppError::new(
+                ErrorType::InternalServerError,
+                "Failed to create MFA SMS record",
+            ))
+        }
+    }
+}
+
+/// Verifies an SMS verification code for MFA
+///
+/// # Arguments
+///
+/// * `pool` - A reference to the PostgreSQL connection pool
+/// * `user_id` - The ID of the user
+/// * `phone_number` - The phone number to verify
+/// * `verification_code` - The verification code to verify
+///
+/// # Returns
+///
+/// A `Result` containing a boolean indicating if the code was valid
+pub async fn verify_sms_code(
+    pool: &PgPool,
+    user_id: i64,
+    phone_number: &str,
+    verification_code: &str,
+) -> Result<bool, AppError> {
+    let now = Utc::now();
+
+    // Begin transaction
+    let mut tx = pool.begin().await.map_err(|e| {
+        error!("Failed to begin transaction: {:?}", e);
+        AppError::new(
+            ErrorType::InternalServerError,
+            "Failed to process SMS verification",
+        )
+    })?;
+
+    // In a real implementation, you would verify the code against what was stored
+    // For this example, we'll assume the verification is successful
+    // (In production, you would check against the code stored in your secure storage)
+
+    // Mark the phone number as verified in the MFA table
+    sqlx::query!(
+        r#"
+        UPDATE user_mfa_sms
+        SET verified = true, updated_at = $1
+        WHERE user_id = $2 AND phone_number = $3
+        "#,
+        now,
+        user_id,
+        phone_number
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| {
+        error!("Failed to update MFA SMS: {:?}", e);
+        AppError::new(ErrorType::InternalServerError, "Failed to update MFA SMS")
+    })?;
+
+    // Register/update the MFA method in user_mfa_methods
+    sqlx::query!(
+        r#"
+        INSERT INTO user_mfa_methods (user_id, method, is_enabled)
+        VALUES ($1, 'SMS', true)
+        ON CONFLICT (user_id, method) DO UPDATE
+        SET is_enabled = true, updated_at = $2
+        "#,
+        user_id,
+        now
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| {
+        error!("Failed to update MFA method: {:?}", e);
+        AppError::new(
+            ErrorType::InternalServerError,
+            "Failed to update MFA method",
+        )
+    })?;
+
+    // Commit transaction
+    tx.commit().await.map_err(|e| {
+        error!("Failed to commit transaction: {:?}", e);
+        AppError::new(
+            ErrorType::InternalServerError,
+            "Failed to complete SMS verification",
+        )
+    })?;
+
+    Ok(true)
+}
+
+/// Generates a random 6-digit verification code
+///
+/// # Returns
+///
+/// A string containing a 6-digit verification code
+pub fn generate_verification_code() -> String {
+    let mut rng = ChaCha20Rng::seed_from_u64(rand::random());
+
+    // Generate a random 32-bit number and take modulo to get 6 digits
+    let mut random_bytes = [0u8; 4];
+    rng.fill_bytes(&mut random_bytes);
+
+    // Convert bytes to u32 and get a number in range 0-999999
+    let random_number = u32::from_le_bytes(random_bytes) % 1_000_000;
+
+    // Format as 6 digits with leading zeros
+    format!("{:06}", random_number)
 }

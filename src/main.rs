@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use crate::api::handler::auth_handler::auth_routes;
 use crate::api::handler::cache_handler::cache_routes;
+use crate::api::handler::mfa_handler::mfa_routes;
 use crate::api::handler::passkey_handler::passkey_auth_routes;
 use crate::api::handler::totp_handler::totp_routes;
 use crate::api::handler::user_handler::user_routes;
@@ -79,6 +80,10 @@ async fn main() {
             api::handler::totp_handler::totp_backup_codes,
             api::handler::totp_handler::validate_backup_code,
             api::handler::totp_handler::delete_backup_codes,
+            api::handler::mfa_handler::register_email_mfa,
+            api::handler::mfa_handler::verify_email_mfa,
+            api::handler::mfa_handler::register_sms_mfa,
+            api::handler::mfa_handler::verify_sms_mfa,
             api::handler::cache_handler::cache_set,
             api::handler::cache_handler::cache_set_ttl,
             api::handler::cache_handler::cache_get,
@@ -93,7 +98,15 @@ async fn main() {
             ApiError,
             error::error_model::ValidationError,
             api::model::user::UserAuthRequest,
-            api::model::auth::TokenResponse
+            api::model::auth::TokenResponse,
+            api::model::mfa::EmailMfaRegisterRequest,
+            api::model::mfa::EmailMfaRegisterResponse,
+            api::model::mfa::EmailMfaVerifyRequest,
+            api::model::mfa::EmailMfaVerifyResponse,
+            api::model::mfa::SmsMfaRegisterRequest,
+            api::model::mfa::SmsMfaRegisterResponse,
+            api::model::mfa::SmsMfaVerifyRequest,
+            api::model::mfa::SmsMfaVerifyResponse
         )),
     )]
     struct ApiDoc;
@@ -142,6 +155,7 @@ async fn main() {
         .nest("/cache", cache_routes())
         .nest("/passkey", passkey_auth_routes())
         .nest("/mfa/totp", totp_routes())
+        .nest("/mfa", mfa_routes())
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         // Serve static files
         .nest_service(

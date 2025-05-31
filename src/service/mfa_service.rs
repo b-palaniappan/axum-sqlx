@@ -710,9 +710,7 @@ pub async fn register_sms_mfa(
     let verification_code = mfa_repository::generate_verification_code();
 
     // Create verification record in the database
-    // For SMS, we don't store the verification code in the database like we do for email
-    // Instead, we might store it in a cache or temporary storage, but for simplicity
-    // we're just creating the SMS record in the database
+    // Store the verification code in the phone_verifications table with a 15-minute expiration
     mfa_repository::create_sms_verification(
         &state.pg_pool,
         user.id,
@@ -749,7 +747,7 @@ pub async fn register_sms_mfa(
 ///
 /// This function:
 /// 1. Retrieves the user from the database
-/// 2. Verifies the provided verification code
+/// 2. Verifies the provided verification code against the stored code in the phone_verifications table
 /// 3. If valid, marks the phone number as verified and enables the MFA method
 ///
 /// # Arguments
@@ -774,10 +772,7 @@ pub async fn verify_sms_mfa(
         .await
         .map_err(|_| AppError::new(ErrorType::NotFound, "User not found"))?;
 
-    // Verify the code
-    // In a real implementation, you would retrieve the stored code from your secure storage
-    // and compare it with the provided code
-    // For this example, we'll just verify it and mark the phone number as verified
+    // Verify the code against the stored record in the phone_verifications table
     let is_valid =
         mfa_repository::verify_sms_code(&state.pg_pool, user.id, phone_number, verification_code)
             .await?;

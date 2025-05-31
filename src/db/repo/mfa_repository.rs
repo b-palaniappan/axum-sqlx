@@ -638,6 +638,9 @@ pub async fn create_sms_verification(
     phone_number: &str,
     verification_code: &str,
 ) -> Result<i64, AppError> {
+    // Calculate the expiration time (15 minutes from now)
+    let expires_at = Utc::now() + Duration::minutes(15);
+    
     // First, insert or update the user_mfa_sms record
     match sqlx::query_scalar!(
         r#"
@@ -654,10 +657,30 @@ pub async fn create_sms_verification(
     .await
     {
         Ok(mfa_sms_id) => {
-            // Store the verification code temporarily in the application state or Redis cache
-            // This is a placeholder - in the actual implementation, you would store this in a secure place
-            // For this example, we'll return the ID from the user_mfa_sms table
-            Ok(mfa_sms_id)
+            // Now create the phone verification record to store the code
+            match sqlx::query_scalar!(
+                r#"
+                INSERT INTO phone_verifications (user_id, phone_number, verification_code, expires_at)
+                VALUES ($1, $2, $3, $4)
+                RETURNING id
+                "#,
+                user_id,
+                phone_number,
+                verification_code,
+                expires_at
+            )
+            .fetch_one(pool)
+            .await
+            {
+                Ok(id) => Ok(id),
+                Err(e) => {
+                    error!("Failed to create phone verification: {:?}", e);
+                    Err(AppError::new(
+                        ErrorType::InternalServerError,
+                        "Failed to create phone verification",
+                    ))
+                }
+            }
         }
         Err(e) => {
             error!("Failed to create MFA SMS record: {:?}", e);
@@ -698,59 +721,107 @@ pub async fn verify_sms_code(
         )
     })?;
 
-    // In a real implementation, you would verify the code against what was stored
-    // For this example, we'll assume the verification is successful
-    // (In production, you would check against the code stored in your secure storage)
-
-    // Mark the phone number as verified in the MFA table
-    sqlx::query!(
+    // Check if the verification code is valid and not expired
+    let verification = sqlx::query!(
         r#"
-        UPDATE user_mfa_sms
-        SET verified = true, updated_at = $1
-        WHERE user_id = $2 AND phone_number = $3
-        "#,
-        now,
-        user_id,
-        phone_number
-    )
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| {
-        error!("Failed to update MFA SMS: {:?}", e);
-        AppError::new(ErrorType::InternalServerError, "Failed to update MFA SMS")
-    })?;
-
-    // Register/update the MFA method in user_mfa_methods
-    sqlx::query!(
-        r#"
-        INSERT INTO user_mfa_methods (user_id, method, is_enabled)
-        VALUES ($1, 'SMS', true)
-        ON CONFLICT (user_id, method) DO UPDATE
-        SET is_enabled = true, updated_at = $2
+        SELECT id
+        FROM phone_verifications
+        WHERE user_id = $1 AND phone_number = $2 AND verification_code = $3
+            AND verified_at IS NULL AND expires_at > $4
         "#,
         user_id,
+        phone_number,
+        verification_code,
         now
     )
-    .execute(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| {
-        error!("Failed to update MFA method: {:?}", e);
+        error!("Failed to verify SMS code: {:?}", e);
         AppError::new(
             ErrorType::InternalServerError,
-            "Failed to update MFA method",
+            "Failed to verify SMS code",
         )
     })?;
 
-    // Commit transaction
-    tx.commit().await.map_err(|e| {
-        error!("Failed to commit transaction: {:?}", e);
-        AppError::new(
-            ErrorType::InternalServerError,
-            "Failed to complete SMS verification",
-        )
-    })?;
+    match verification {
+        Some(record) => {
+            // Mark the verification as used
+            sqlx::query!(
+                r#"
+                UPDATE phone_verifications
+                SET verified_at = $1
+                WHERE id = $2
+                "#,
+                now,
+                record.id
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                error!("Failed to update phone verification: {:?}", e);
+                AppError::new(
+                    ErrorType::InternalServerError,
+                    "Failed to update phone verification",
+                )
+            })?;
 
-    Ok(true)
+            // Mark the phone number as verified in the MFA table
+            sqlx::query!(
+                r#"
+                UPDATE user_mfa_sms
+                SET verified = true, updated_at = $1
+                WHERE user_id = $2 AND phone_number = $3
+                "#,
+                now,
+                user_id,
+                phone_number
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                error!("Failed to update MFA SMS: {:?}", e);
+                AppError::new(ErrorType::InternalServerError, "Failed to update MFA SMS")
+            })?;
+
+            // Register/update the MFA method in user_mfa_methods
+            sqlx::query!(
+                r#"
+                INSERT INTO user_mfa_methods (user_id, method, is_enabled)
+                VALUES ($1, 'SMS', true)
+                ON CONFLICT (user_id, method) DO UPDATE
+                SET is_enabled = true, updated_at = $2
+                "#,
+                user_id,
+                now
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                error!("Failed to update MFA method: {:?}", e);
+                AppError::new(
+                    ErrorType::InternalServerError,
+                    "Failed to update MFA method",
+                )
+            })?;
+
+            // Commit transaction
+            tx.commit().await.map_err(|e| {
+                error!("Failed to commit transaction: {:?}", e);
+                AppError::new(
+                    ErrorType::InternalServerError,
+                    "Failed to complete SMS verification",
+                )
+            })?;
+
+            Ok(true)
+        }
+        None => {
+            // Code not valid or expired
+            tx.rollback().await.ok(); // Ignore rollback errors
+            Ok(false)
+        }
+    }
 }
 
 /// Generates a random 6-digit verification code

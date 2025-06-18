@@ -90,8 +90,12 @@ CREATE TABLE user_mfa_email
     verified   BOOLEAN                  DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP WITH TIME ZONE,
     UNIQUE (user_id, email)
 );
+
+-- Ensure only one active email MFA record per user and email
+CREATE UNIQUE INDEX idx_one_active_mfa_email_per_user_email ON user_mfa_email (user_id, email) WHERE deleted_at IS NULL;
 
 CREATE TABLE user_mfa_sms
 (
@@ -101,8 +105,12 @@ CREATE TABLE user_mfa_sms
     verified     BOOLEAN                  DEFAULT FALSE,
     created_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    deleted_at   TIMESTAMP WITH TIME ZONE,
     UNIQUE (user_id, phone_number)
 );
+
+-- Ensure only one active SMS MFA record per user and phone number
+CREATE UNIQUE INDEX idx_one_active_mfa_sms_per_user_phone ON user_mfa_sms (user_id, phone_number) WHERE deleted_at IS NULL;
 
 CREATE TABLE user_mfa_totp
 (
@@ -156,6 +164,19 @@ CREATE TABLE email_verifications
     expires_at        TIMESTAMP WITH TIME ZONE NOT NULL,
     verified_at       TIMESTAMP WITH TIME ZONE,
     CONSTRAINT one_active_verification_per_email UNIQUE (email, verified_at)
+);
+
+-- Phone Verification Table
+CREATE TABLE phone_verifications
+(
+    id                BIGSERIAL PRIMARY KEY,
+    user_id           BIGINT                   NOT NULL REFERENCES users (id),
+    phone_number      VARCHAR(20)              NOT NULL,
+    verification_code VARCHAR(64)              NOT NULL,
+    created_at        TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    expires_at        TIMESTAMP WITH TIME ZONE NOT NULL,
+    verified_at       TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT one_active_verification_per_phone UNIQUE (phone_number, verified_at)
 );
 
 -- Enhanced Audit Log for authentication events

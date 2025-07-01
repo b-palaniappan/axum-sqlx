@@ -640,7 +640,7 @@ pub async fn create_sms_verification(
 ) -> Result<i64, AppError> {
     // Calculate the expiration time (15 minutes from now)
     let expires_at = Utc::now() + Duration::minutes(15);
-    
+
     // First, insert or update the user_mfa_sms record
     match sqlx::query_scalar!(
         r#"
@@ -738,10 +738,7 @@ pub async fn verify_sms_code(
     .await
     .map_err(|e| {
         error!("Failed to verify SMS code: {:?}", e);
-        AppError::new(
-            ErrorType::InternalServerError,
-            "Failed to verify SMS code",
-        )
+        AppError::new(ErrorType::InternalServerError, "Failed to verify SMS code")
     })?;
 
     match verification {

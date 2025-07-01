@@ -45,11 +45,11 @@ pub fn totp_routes() -> Router<Arc<AppState>> {
         .route("/validate/{key}", post(totp_validate))
         .route("/{key}", delete(totp_delete))
         .route("/backup-codes/{key}", get(totp_backup_codes))
-        .route("/validate-backup/{key}", post(validate_backup_code))
         .route(
-            "/backup-codes/{key}",
-            axum::routing::delete(delete_backup_codes),
+            "/validate-backup/{key}",
+            post(generate_validate_backup_code),
         )
+        .route("/backup-codes/{key}", delete(delete_backup_codes))
 }
 
 /// Register a new TOTP device for a user.
@@ -221,7 +221,7 @@ async fn totp_backup_codes(
         (status = 500, description = "Internal server error", body = ApiError)
     )
 )]
-async fn validate_backup_code(
+async fn generate_validate_backup_code(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
     Json(request): Json<ValidateBackupCodeRequest>,

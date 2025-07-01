@@ -78,7 +78,7 @@ async fn main() {
             api::handler::totp_handler::totp_register,
             api::handler::totp_handler::totp_validate,
             api::handler::totp_handler::totp_backup_codes,
-            api::handler::totp_handler::validate_backup_code,
+            api::handler::totp_handler::generate_validate_backup_code,
             api::handler::totp_handler::delete_backup_codes,
             api::handler::mfa_handler::register_email_mfa,
             api::handler::mfa_handler::verify_email_mfa,

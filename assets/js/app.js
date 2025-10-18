@@ -1,16 +1,21 @@
-function showTab(tabName, element) {
-  // Remove active class from all tabs and form containers
+window.showTab = function(tabName, element) {
+  // Remove active class from all tabs and hide all form containers
   document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-  document.querySelectorAll('.form-container').forEach(container => container.classList.remove('active'));
+  document.querySelectorAll('.form-container').forEach(container => {
+    container.classList.remove('active');
+    container.classList.add('hidden');
+  });
 
-  // Add active class to clicked tab and corresponding form container
+  // Add active class to clicked tab and show corresponding form container
   element.classList.add('active');
-  document.getElementById(tabName).classList.add('active');
+  const targetContainer = document.getElementById(tabName);
+  targetContainer.classList.add('active');
+  targetContainer.classList.remove('hidden');
 
   // Clear and hide flash messages when switching tabs
   const flashMessage = document.getElementById('flash_message');
   flashMessage.innerHTML = '';
-  flashMessage.className = '';
+  flashMessage.className = 'flash-message';
   flashMessage.style.display = 'none';
 }
 
@@ -70,11 +75,11 @@ function register() {
           const flash_message = document.getElementById('flash_message');
           if (response.ok) {
             flash_message.innerHTML = "Successfully registered!";
-            flash_message.className = "info";
+            flash_message.className = "flash-message info";
             flash_message.style.display = 'block';
           } else {
             flash_message.innerHTML = "Error whilst registering!";
-            flash_message.className = "error";
+            flash_message.className = "flash-message error";
             flash_message.style.display = 'block';
           }
         });
@@ -134,11 +139,11 @@ function login() {
           const flash_message = document.getElementById('flash_message');
           if (response.ok) {
             flash_message.innerHTML = "Successfully logged in!";
-            flash_message.className = "info";
+            flash_message.className = "flash-message info";
             flash_message.style.display = 'block';
           } else {
             flash_message.innerHTML = "Error whilst logging in!";
-            flash_message.className = "error";
+            flash_message.className = "flash-message error";
             flash_message.style.display = 'block';
           }
         });

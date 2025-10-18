@@ -959,9 +959,13 @@ pub async fn start_registration(
             )
             .await;
 
-            saved_user.is_err().then(|| {
-                error!("Error creating user: {:?}", saved_user.err());
-            });
+            if let Err(e) = saved_user {
+                error!("Error creating user: {:?}", e);
+                return Err(AppError::new(
+                    ErrorType::InternalServerError,
+                    "Failed to create user. Please try again later.",
+                ));
+            }
             None
         }
         Err(e) => {

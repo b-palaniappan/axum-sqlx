@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>WebAuthn-rs Tutorial</title>
-  <script src="https://cdn.jsdelivr.net/npm/@unocss/runtime"></script>
   <script src="./js/base64.min.js" defer></script>
   <script src="./js/app.js"></script>
   <style>
@@ -39,7 +38,7 @@
     .container {
       background: var(--surface);
       backdrop-filter: blur(20px);
-      border-radius: 24px;
+      border-radius: 12px;
       box-shadow: var(--shadow-lg);
       border: 1px solid rgba(255, 255, 255, 0.2);
       overflow: hidden;
@@ -73,8 +72,9 @@
       display: flex;
       margin: 30px 40px 0;
       background: rgba(0, 0, 0, 0.05);
-      border-radius: 16px;
+      border-radius: 8px;
       padding: 6px;
+      gap: 8px;
     }
 
     .tab {
@@ -82,7 +82,7 @@
       padding: 14px 20px;
       background: transparent;
       border: none;
-      border-radius: 12px;
+      border-radius: 6px;
       font-size: 15px;
       font-weight: 600;
       color: var(--text-secondary);
@@ -123,7 +123,7 @@
       width: 100%;
       padding: 16px 20px;
       border: 2px solid var(--border);
-      border-radius: 16px;
+      border-radius: 8px;
       font-size: 16px;
       color: var(--text-primary);
       background: white;
@@ -132,8 +132,8 @@
     }
 
     .input:focus {
-      border-color: #667eea;
-      box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+      border-color: #a78bfa;
+      box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.1);
       transform: translateY(-2px);
     }
 
@@ -146,7 +146,7 @@
       padding: 16px 24px;
       background: var(--primary-gradient);
       border: none;
-      border-radius: 16px;
+      border-radius: 8px;
       color: white;
       font-size: 16px;
       font-weight: 600;
@@ -169,7 +169,7 @@
     .flash-message {
       margin: 20px 40px;
       padding: 16px 20px;
-      border-radius: 12px;
+      border-radius: 8px;
       font-size: 14px;
       font-weight: 500;
       text-align: center;
@@ -193,7 +193,7 @@
     @media (max-width: 640px) {
       .container {
         margin: 10px;
-        border-radius: 20px;
+        border-radius: 10px;
       }
       
       .header, .form-container, .tabs {

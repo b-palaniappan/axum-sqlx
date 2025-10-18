@@ -1,8 +1,25 @@
+function showTab(tabName, element) {
+  // Remove active class from all tabs and form containers
+  document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+  document.querySelectorAll('.form-container').forEach(container => container.classList.remove('active'));
+
+  // Add active class to clicked tab and corresponding form container
+  element.classList.add('active');
+  document.getElementById(tabName).classList.add('active');
+
+  // Clear and hide flash messages when switching tabs
+  const flashMessage = document.getElementById('flash_message');
+  flashMessage.innerHTML = '';
+  flashMessage.className = '';
+  flashMessage.style.display = 'none';
+}
 
 function register() {
-  let username = document.getElementById('username').value;
-  if (username === "") {
-    alert("Please enter a username");
+  let firstName = document.getElementById('firstName').value;
+  let lastName = document.getElementById('lastName').value;
+  let username = document.getElementById('signupEmail').value;
+  if (firstName === "" || lastName === "" || username === "") {
+    alert("Please fill in all fields");
     return;
   }
 
@@ -13,6 +30,8 @@ function register() {
     },
     body: JSON.stringify({
       email: username,
+      firstName: firstName,
+      lastName: lastName,
       type: "passkey",
     })
   })
@@ -52,16 +71,18 @@ function register() {
           if (response.ok) {
             flash_message.innerHTML = "Successfully registered!";
             flash_message.className = "info";
+            flash_message.style.display = 'block';
           } else {
             flash_message.innerHTML = "Error whilst registering!";
             flash_message.className = "error";
+            flash_message.style.display = 'block';
           }
         });
     })
 }
 
 function login() {
-  let username = document.getElementById('username').value;
+  let username = document.getElementById('signinEmail').value;
   if (username === "") {
     alert("Please enter a username");
     return;
@@ -114,9 +135,11 @@ function login() {
           if (response.ok) {
             flash_message.innerHTML = "Successfully logged in!";
             flash_message.className = "info";
+            flash_message.style.display = 'block';
           } else {
             flash_message.innerHTML = "Error whilst logging in!";
             flash_message.className = "error";
+            flash_message.style.display = 'block';
           }
         });
     });

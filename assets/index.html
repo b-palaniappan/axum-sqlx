@@ -7,137 +7,204 @@
   <script src="./js/base64.min.js" defer></script>
   <script src="./js/app.js" defer></script>
   <style>
-      :root {
-          --primary-color: #5d7eff;
-          --accent-color: #ff7b7b;
-          --bg-color: #1e1e2e;
-          --card-bg-color: #282838;
-          --text-color: #e0e0e0;
-          --input-bg-color: #353545;
-          --input-border-color: #444454;
-          --border-radius: 6px;
-      }
+    :root {
+      --primary-color: #5d7eff;
+      --accent-color: #ff7b7b;
+      --bg-color: #1e1e2e;
+      --card-bg-color: #282838;
+      --text-color: #e0e0e0;
+      --input-bg-color: #353545;
+      --input-border-color: #444454;
+      --border-radius: 6px;
+    }
 
-      body {
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-          line-height: 1.6;
-          margin: 0;
-          padding: 0;
-          background-color: var(--bg-color);
-          color: var(--text-color);
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          min-height: 100vh;
-      }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      line-height: 1.6;
+      margin: 0;
+      padding: 0;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
 
-      .container {
-          width: 100%;
-          max-width: 500px;
-          padding: 2rem;
-          background-color: var(--card-bg-color);
-          border-radius: var(--border-radius);
-          box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
-      }
+    .container {
+      width: 100%;
+      max-width: 500px;
+      padding: 2rem 2rem 0 2rem;
+      background-color: var(--card-bg-color);
+      border-radius: var(--border-radius);
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+    }
 
-      h1 {
-          color: var(--primary-color);
-          text-align: center;
-          margin-bottom: 1.5rem;
-      }
+    h1 {
+      color: var(--primary-color);
+      text-align: center;
+      margin-bottom: 1.5rem;
+    }
 
-      .form-group {
-          margin-bottom: 1.5rem;
-      }
+    .form-group {
+      margin-bottom: 1.5rem;
+    }
 
-      label {
-          display: block;
-          margin-bottom: 0.5rem;
-          font-weight: 500;
-      }
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: 500;
+    }
 
-      input {
-          width: 100%;
-          padding: 0.75rem;
-          border: 1px solid var(--input-border-color);
-          background-color: var(--input-bg-color);
-          color: var(--text-color);
-          border-radius: var(--border-radius);
-          font-size: 1rem;
-          margin-bottom: 1rem;
-          box-sizing: border-box;
-      }
+    input {
+      width: 100%;
+      padding: 0.75rem;
+      border: 1px solid var(--input-border-color);
+      background-color: var(--input-bg-color);
+      color: var(--text-color);
+      border-radius: var(--border-radius);
+      font-size: 1rem;
+      margin-bottom: 1rem;
+      box-sizing: border-box;
+    }
 
-      input:focus {
-          outline: 2px solid var(--primary-color);
-          border-color: var(--primary-color);
-      }
+    input:focus {
+      outline: 2px solid var(--primary-color);
+      border-color: var(--primary-color);
+    }
 
-      .button-group {
-          display: flex;
-          gap: 1rem;
-      }
+    .button-group {
+      display: flex;
+      gap: 1rem;
+    }
 
-      button {
-          background-color: var(--primary-color);
-          color: white;
-          border: none;
-          border-radius: var(--border-radius);
-          padding: 0.75rem 1.5rem;
-          font-size: 1rem;
-          cursor: pointer;
-          transition: background-color 0.2s;
-          flex: 1;
-      }
+    button {
+      background-color: var(--primary-color);
+      color: white;
+      border: none;
+      border-radius: var(--border-radius);
+      padding: 0.75rem 1.5rem;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: background-color 0.2s;
+      flex: 1;
+    }
 
-      button:hover {
-          background-color: #4a6ae8;
-          box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-      }
+    button:hover {
+      background-color: #4a6ae8;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    }
 
-      button:last-child {
-          background-color: var(--accent-color);
-      }
+    button:last-child {
+      background-color: var(--accent-color);
+    }
 
-      button:last-child:hover {
-          background-color: #f66a6a;
-      }
+    button:last-child:hover {
+      background-color: #f66a6a;
+    }
 
-      #flash_message {
-          padding: 1rem;
-          border-radius: var(--border-radius);
-          margin-top: 1rem;
-          text-align: center;
-          font-weight: 500;
-      }
+    #flash_message {
+      padding: 1rem;
+      border-radius: var(--border-radius);
+      margin: 1rem 2rem 2rem 2rem;
+      text-align: center;
+      font-weight: 500;
+    }
 
-      .success {
-          background-color: #264c36;
-          color: #7ce0a3;
-      }
+    .tabs {
+      display: flex;
+      margin-bottom: 0;
+      border-bottom: 2px solid var(--input-border-color);
+      background-color: var(--input-bg-color);
+      border-radius: var(--border-radius) var(--border-radius) 0 0;
+      overflow: hidden;
+    }
 
-      .info {
-          background-color: #26405e;
-          color: #90ceff;
-      }
+    .tab {
+      flex: 1;
+      padding: 1rem 1.5rem;
+      text-align: center;
+      cursor: pointer;
+      background-color: var(--input-bg-color);
+      border: 1px solid var(--input-border-color);
+      color: var(--text-color);
+      font-size: 1rem;
+      font-weight: 500;
+      transition: all 0.3s ease;
+      border-bottom: none;
+      position: relative;
+    }
 
-      .error {
-          background-color: #4c2626;
-          color: #ff9e9e;
-      }
+    .tab:first-child {
+      border-right: none;
+    }
+
+    .tab.active {
+      color: var(--primary-color);
+      background-color: var(--card-bg-color);
+      border-color: var(--primary-color);
+      border-bottom: 2px solid var(--card-bg-color);
+      transform: translateY(2px);
+      z-index: 1;
+    }
+
+    .tab:hover:not(.active) {
+      background-color: rgba(93, 126, 255, 0.1);
+      color: var(--primary-color);
+    }
+
+    .form-container {
+      display: none;
+      padding: 2rem;
+      border: 1px solid var(--input-border-color);
+      border-top: none;
+      border-radius: 0 0 var(--border-radius) var(--border-radius);
+      background-color: var(--card-bg-color);
+    }
+
+    .form-container.active {
+      display: block;
+    }
   </style>
 </head>
 <body>
 <div class="container">
   <h1>WebAuthn-rs Tutorial</h1>
 
-  <div class="form-group">
-    <label for="username">Email Address</label>
-    <input type="email" id="username" placeholder="Enter your email address" autocomplete="username">
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('signup', this)">Sign Up</button>
+    <button class="tab" onclick="showTab('signin', this)">Sign In</button>
+  </div>
+
+  <div id="signup" class="form-container active">
+    <div class="form-group">
+      <label for="firstName">First Name</label>
+      <input type="text" id="firstName" placeholder="Enter your first name" autocomplete="given-name">
+    </div>
+
+    <div class="form-group">
+      <label for="lastName">Last Name</label>
+      <input type="text" id="lastName" placeholder="Enter your last name" autocomplete="family-name">
+    </div>
+
+    <div class="form-group">
+      <label for="signupEmail">Email Address</label>
+      <input type="email" id="signupEmail" placeholder="Enter your email address" autocomplete="username">
+    </div>
 
     <div class="button-group">
       <button onclick="register()">Register</button>
+    </div>
+  </div>
+
+  <div id="signin" class="form-container">
+    <div class="form-group">
+      <label for="signinEmail">Email Address</label>
+      <input type="email" id="signinEmail" placeholder="Enter your email address" autocomplete="username">
+    </div>
+
+    <div class="button-group">
       <button onclick="login()">Login</button>
     </div>
   </div>

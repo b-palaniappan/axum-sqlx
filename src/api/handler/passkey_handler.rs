@@ -5,7 +5,7 @@ use crate::service::auth_service;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use std::sync::Arc;
 use webauthn_rs::prelude::{PublicKeyCredential, RegisterPublicKeyCredential};
@@ -16,7 +16,7 @@ pub fn passkey_auth_routes() -> Router<Arc<AppState>> {
         .route("/register/finish", post(registration_finish_handler))
         .route("/login/start", post(login_start_handler))
         .route("/login/finish", post(login_finish_handler))
-    // .route("/logout", get(logout_handler))
+        .route("/logout", get(logout_handler))
 }
 
 /// Handles the start of the passkey registration process.
@@ -186,7 +186,7 @@ async fn login_finish_handler(
         .await
 }
 
-// async fn logout_handler(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
-//     // Call service method.
-//     auth_service::logout(State(state)).await
-// }
+async fn logout_handler(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
+    // Call service method.
+    auth_service::logout(State(state)).await
+}

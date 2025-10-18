@@ -71,3 +71,7 @@
   - Logout
   - User Profile Update
   - User Profile Soft Delete
+
+## TODO
+- `Verify TOTP MFA` should return a valid JWT token if the TOTP is valid.
+- `/mfa/totp/validate-backup/:userKey` should return a valid JWT token if the backup code is valid.

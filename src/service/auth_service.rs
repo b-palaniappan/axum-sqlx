@@ -953,8 +953,8 @@ pub async fn start_registration(
             let saved_user = users_repository::create_user(
                 &state.pg_pool,
                 &user_key,
-                None,
-                None,
+                Some(passkey_registration_request.first_name),
+                Some(passkey_registration_request.last_name),
                 &passkey_registration_request.email,
             )
             .await;
@@ -1035,7 +1035,7 @@ pub async fn finish_registration(
     let user = users_repository::get_user_by_key(&state.pg_pool, &user_key)
         .await
         .map_err(|e| {
-            error!("Error getting user by key: {:?}", e);
+            error!("Error getting user by key: {:?}. Error {:?}", &user_key, e);
             AppError::new(
                 ErrorType::InternalServerError,
                 "Something went wrong. Please try again later.",
@@ -1230,4 +1230,11 @@ pub async fn finish_authentication(
             ))
         }
     }
+}
+
+pub async fn logout(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
+    // This is a generic logout endpoint that does not require a request body.
+    // It simply returns a success message. If you want to clear cookies or tokens,
+    // you can add logic here as needed.
+    Ok((StatusCode::OK, "Logout successful").into_response())
 }

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WebAuthn-rs Tutorial</title>
+  <title>Axum WebAuthn Tutorial</title>
   <script src="./js/base64.min.js" defer></script>
   <script src="./js/app.js"></script>
   <style>
@@ -190,19 +190,86 @@
       display: none !important;
     }
 
+    .toaster {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 16px 24px;
+      border-radius: 8px;
+      color: white;
+      font-size: 14px;
+      font-weight: 500;
+      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.2);
+      transform: translateX(400px);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      z-index: 1000;
+      max-width: 350px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .toaster-close {
+      background: none;
+      border: none;
+      color: white;
+      font-size: 18px;
+      font-weight: bold;
+      cursor: pointer;
+      padding: 0;
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      transition: background-color 0.2s;
+      flex-shrink: 0;
+    }
+
+    .toaster-close:hover {
+      background-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .toaster.show {
+      transform: translateX(0);
+      opacity: 1;
+    }
+
+    .toaster.success {
+      background: linear-gradient(135deg, #48bb78, #38a169);
+    }
+
+    .toaster.error {
+      background: linear-gradient(135deg, #f56565, #e53e3e);
+    }
+
     @media (max-width: 640px) {
       .container {
         margin: 10px;
         border-radius: 10px;
       }
-      
+
       .header, .form-container, .tabs {
         padding-left: 24px;
         padding-right: 24px;
       }
-      
+
       .title {
         font-size: 28px;
+      }
+
+      .toaster {
+        left: 20px;
+        right: 20px;
+        max-width: none;
+        transform: translateY(-100px);
+      }
+
+      .toaster.show {
+        transform: translateY(0);
       }
     }
   </style>
@@ -210,7 +277,7 @@
 <body>
 <div class="container">
   <div class="header">
-    <h1 class="title">WebAuthn</h1>
+    <h1 class="title">Axum WebAuthn</h1>
     <p class="subtitle">Secure passwordless authentication</p>
   </div>
 

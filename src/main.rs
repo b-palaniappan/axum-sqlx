@@ -15,6 +15,7 @@ use crate::error::error_model::ApiError;
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
+use axum::middleware::from_fn_with_state;
 use sqlx::types::chrono::Utc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
@@ -154,8 +155,20 @@ async fn main() {
         .nest("/users", user_routes())
         .nest("/cache", cache_routes())
         .nest("/passkey", passkey_auth_routes())
-        .nest("/mfa/totp", totp_routes())
-        .nest("/mfa", mfa_routes())
+        .nest(
+            "/mfa/totp",
+            totp_routes().route_layer(from_fn_with_state(
+                shared_state.clone(),
+                middleware::auth::require_auth,
+            )),
+        )
+        .nest(
+            "/mfa",
+            mfa_routes().route_layer(from_fn_with_state(
+                shared_state.clone(),
+                middleware::auth::require_auth,
+            )),
+        )
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         // Serve static files
         .nest_service(

@@ -1,66 +1,76 @@
-window.showTab = function(tabName, element) {
-  // Remove active class from all tabs and hide all form containers
-  document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-  document.querySelectorAll('.form-container').forEach(container => {
-    container.classList.remove('active');
-    container.classList.add('hidden');
-  });
+function showToaster(message, type = 'success') {
+  const toaster = document.createElement('div');
+  toaster.className = `toaster ${type}`;
+  toaster.innerHTML = `
+    <span>${message}</span>
+    <button class="toaster-close" aria-label="Close notification">×</button>
+  `;
+  document.body.appendChild(toaster);
 
-  // Add active class to clicked tab and show corresponding form container
+  const closeToaster = () => {
+    toaster.classList.remove('show');
+    setTimeout(() => toaster.remove(), 300);
+  };
+
+  toaster.querySelector('.toaster-close').addEventListener('click', closeToaster);
+  setTimeout(() => toaster.classList.add('show'), 10);
+  setTimeout(closeToaster, 10000);
+}
+
+globalThis.showTab = function(tabName, element) {
+  for (const tab of document.querySelectorAll('.tab')) {
+    tab.classList.remove('active');
+  }
+  for (const container of document.querySelectorAll('.form-container')) {
+    container.classList.add('hidden');
+    container.classList.remove('active');
+  }
+
   element.classList.add('active');
   const targetContainer = document.getElementById(tabName);
   targetContainer.classList.add('active');
   targetContainer.classList.remove('hidden');
 
-  // Clear and hide flash messages when switching tabs
   const flashMessage = document.getElementById('flash_message');
   flashMessage.innerHTML = '';
   flashMessage.className = 'flash-message';
   flashMessage.style.display = 'none';
-}
+
+  // Clear all input fields when switching tabs
+  for (const input of document.querySelectorAll('.input')) {
+    input.value = '';
+  }
+};
 
 function register() {
-  let firstName = document.getElementById('firstName').value;
-  let lastName = document.getElementById('lastName').value;
-  let username = document.getElementById('signupEmail').value;
-  if (firstName === "" || lastName === "" || username === "") {
-    alert("Please fill in all fields");
-    return;
-  }
+  const firstName = document.getElementById('firstName').value;
+  const lastName = document.getElementById('lastName').value;
+  const username = document.getElementById('signupEmail').value;
+
+  if (!firstName || !lastName || !username) return alert("Please fill in all fields");
 
   fetch('http://localhost:3000/passkey/register/start', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      email: username,
-      firstName: firstName,
-      lastName: lastName,
-      type: "passkey",
-    })
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: username, firstName, lastName, type: "passkey" })
   })
-    .then(response => response.json())
-    .then(credentialCreationOptions => {
-      window.requestId = credentialCreationOptions.requestId;
+    .then(res => res.json())
+    .then(options => {
+      globalThis.requestId = options.requestId;
+      options.publicKey.challenge = Base64.toUint8Array(options.publicKey.challenge);
+      options.publicKey.user.id = Base64.toUint8Array(options.publicKey.user.id);
+      if (options.publicKey.excludeCredentials) {
+        for (const item of options.publicKey.excludeCredentials) {
+          item.id = Base64.toUint8Array(item.id);
+        }
+      }
 
-      credentialCreationOptions.publicKey.challenge = Base64.toUint8Array(credentialCreationOptions.publicKey.challenge);
-      credentialCreationOptions.publicKey.user.id = Base64.toUint8Array(credentialCreationOptions.publicKey.user.id);
-      credentialCreationOptions.publicKey.excludeCredentials?.forEach(function (listItem) {
-        listItem.id = Base64.toUint8Array(listItem.id)
-      });
-
-      return navigator.credentials.create({
-        publicKey: credentialCreationOptions.publicKey
-      });
+      return navigator.credentials.create({ publicKey: options.publicKey });
     })
-    .then((credential) => {
+    .then(credential => {
       fetch('http://localhost:3000/passkey/register/finish', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Request-ID': window.requestId,
-        },
+        headers: { 'Content-Type': 'application/json', 'X-Request-ID': globalThis.requestId },
         body: JSON.stringify({
           id: credential.id,
           rawId: Base64.fromUint8Array(new Uint8Array(credential.rawId), true),
@@ -70,59 +80,43 @@ function register() {
             clientDataJSON: Base64.fromUint8Array(new Uint8Array(credential.response.clientDataJSON), true),
           },
         })
-      })
-        .then((response) => {
-          const flash_message = document.getElementById('flash_message');
-          if (response.ok) {
-            flash_message.innerHTML = "Successfully registered!";
-            flash_message.className = "flash-message info";
-            flash_message.style.display = 'block';
-          } else {
-            flash_message.innerHTML = "Error whilst registering!";
-            flash_message.className = "flash-message error";
-            flash_message.style.display = 'block';
-          }
-        });
-    })
+      }).then(res => {
+        showToaster(res.ok ? "Successfully registered!" : "Error whilst registering!", res.ok ? 'success' : 'error');
+        // Clear input fields after successful registration
+        if (res.ok) {
+          document.getElementById('firstName').value = '';
+          document.getElementById('lastName').value = '';
+          document.getElementById('signupEmail').value = '';
+        }
+      });
+    });
 }
 
 function login() {
-  let username = document.getElementById('signinEmail').value;
-  if (username === "") {
-    alert("Please enter a username");
-    return;
-  }
+  const username = document.getElementById('signinEmail').value;
+  if (!username) return alert("Please enter a username");
 
   fetch('http://localhost:3000/passkey/login/start', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      email: username,
-      type: "passkey",
-    })
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: username, type: "passkey" })
   })
-    .then(response => response.json())
-    .then((credentialRequestOptions) => {
-      window.requestId = credentialRequestOptions.requestId;
+    .then(res => res.json())
+    .then(options => {
+      globalThis.requestId = options.requestId;
+      options.publicKey.challenge = Base64.toUint8Array(options.publicKey.challenge);
+      if (options.publicKey.allowCredentials) {
+        for (const item of options.publicKey.allowCredentials) {
+          item.id = Base64.toUint8Array(item.id);
+        }
+      }
 
-      credentialRequestOptions.publicKey.challenge = Base64.toUint8Array(credentialRequestOptions.publicKey.challenge);
-      credentialRequestOptions.publicKey.allowCredentials?.forEach(function (listItem) {
-        listItem.id = Base64.toUint8Array(listItem.id)
-      });
-
-      return navigator.credentials.get({
-        publicKey: credentialRequestOptions.publicKey
-      });
+      return navigator.credentials.get({ publicKey: options.publicKey });
     })
-    .then((assertion) => {
+    .then(assertion => {
       fetch('http://localhost:3000/passkey/login/finish', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Request-ID': window.requestId,
-        },
+        headers: { 'Content-Type': 'application/json', 'X-Request-ID': globalThis.requestId },
         body: JSON.stringify({
           id: assertion.id,
           rawId: Base64.fromUint8Array(new Uint8Array(assertion.rawId), true),
@@ -131,21 +125,15 @@ function login() {
             authenticatorData: Base64.fromUint8Array(new Uint8Array(assertion.response.authenticatorData), true),
             clientDataJSON: Base64.fromUint8Array(new Uint8Array(assertion.response.clientDataJSON), true),
             signature: Base64.fromUint8Array(new Uint8Array(assertion.response.signature), true),
-            userHandle: Base64.fromUint8Array(new Uint8Array(assertion.response.userHandle), true)
+            userHandle: Base64.fromUint8Array(new Uint8Array(assertion.response.userHandle), true),
           },
-        }),
-      })
-        .then((response) => {
-          const flash_message = document.getElementById('flash_message');
-          if (response.ok) {
-            flash_message.innerHTML = "Successfully logged in!";
-            flash_message.className = "flash-message info";
-            flash_message.style.display = 'block';
-          } else {
-            flash_message.innerHTML = "Error whilst logging in!";
-            flash_message.className = "flash-message error";
-            flash_message.style.display = 'block';
-          }
-        });
+        })
+      }).then(res => {
+        showToaster(res.ok ? "Successfully logged in!" : "Error whilst logging in!", res.ok ? 'success' : 'error');
+        // Clear input field after successful login
+        if (res.ok) {
+          document.getElementById('signinEmail').value = '';
+        }
+      });
     });
 }

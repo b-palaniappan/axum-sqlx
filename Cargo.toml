@@ -36,11 +36,11 @@ sqlx = { version = "^0", features = [
   "chrono",
   "json",
 ] }
-axum-extra = { version = "0.10.0", features = ["cookie-private", "typed-header"] }
+axum-extra = { version = "^0", features = ["cookie-private", "typed-header"] }
 
 # Security
 argon2 = "^0"
-jsonwebtoken = "^9"
+jsonwebtoken = { version = "^10", features = ["rust_crypto"] }
 hmac = "^0"
 sha2 = "^0"
 totp-rs = { version = "^5", features = ["qr", "otpauth"] }   # for TOTP 2FA

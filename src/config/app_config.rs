@@ -1,7 +1,8 @@
-use bb8_redis::bb8::Pool;
 use bb8_redis::RedisConnectionManager;
-use sqlx::postgres::PgPoolOptions;
+use bb8_redis::bb8::Pool;
+use secrecy::{ExposeSecret, SecretString};
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 use std::env;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,23 +21,46 @@ use webauthn_rs::{Webauthn, WebauthnBuilder};
 pub async fn initialize_app_state() -> Arc<AppState> {
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let redis_url = env::var("REDIS_URL").expect("Error getting redis host");
-    let hmac_key = env::var("HMAC_SECRET").expect("Error getting HMAC secret");
-    let jwt_private_key = env::var("JWT_PRIVATE_KEY").expect("Error getting JWT private key");
-    let jwt_public_key = env::var("JWT_PUBLIC_KEY").expect("Error getting JWT public key");
+    let hmac_key = SecretString::new(
+        env::var("HMAC_SECRET")
+            .expect("Error getting HMAC secret")
+            .into(),
+    );
+    let jwt_private_key = SecretString::new(
+        env::var("JWT_PRIVATE_KEY")
+            .expect("Error getting JWT private key")
+            .into(),
+    );
+    let jwt_public_key = SecretString::new(
+        env::var("JWT_PUBLIC_KEY")
+            .expect("Error getting JWT public key")
+            .into(),
+    );
     let jwt_expiration = env::var("JWT_TOKEN_EXPIRATION")
         .expect("Error getting JWT expiration")
         .parse::<u64>()
         .expect("Error parsing JWT expiration");
     let jwt_issuer = env::var("JWT_TOKEN_ISSUER").expect("Error getting JWT issuer");
-    let dummy_hashed_password =
-        env::var("DUMMY_HASHED_PASSWORD").expect("Error getting dummy password");
+    let dummy_hashed_password = SecretString::new(
+        env::var("DUMMY_HASHED_PASSWORD")
+            .expect("Error getting dummy password")
+            .into(),
+    );
 
     // Get the encryption key for sensitive data like TOTP secrets
-    let encryption_key_str = env::var("ENCRYPTION_KEY").expect("ENCRYPTION_KEY must be set");
-    let argon_pepper = env::var("ARGON_PEPPER").expect("Error getting Argon2 pepper");
+    let encryption_key_str = SecretString::new(
+        env::var("ENCRYPTION_KEY")
+            .expect("ENCRYPTION_KEY must be set")
+            .into(),
+    );
+    let argon_pepper = SecretString::new(
+        env::var("ARGON_PEPPER")
+            .expect("Error getting Argon2 pepper")
+            .into(),
+    );
 
     // Convert to bytes and ensure it's exactly 32 bytes
-    let key_bytes = encryption_key_str.as_bytes();
+    let key_bytes = encryption_key_str.expose_secret().as_bytes();
     if key_bytes.len() != 32 {
         panic!(
             "ENCRYPTION_KEY must be exactly 32 bytes when encoded as UTF-8. Current length: {}",
@@ -119,12 +143,12 @@ pub struct AppState {
     pub pg_pool: PgPool,
     pub redis_pool: Pool<RedisConnectionManager>,
     pub webauthn: Webauthn,
-    pub hmac_key: String,
-    pub jwt_private_key: String,
-    pub jwt_public_key: String,
+    pub hmac_key: SecretString,
+    pub jwt_private_key: SecretString,
+    pub jwt_public_key: SecretString,
     pub jwt_expiration: u64,
     pub jwt_issuer: String,
-    pub dummy_hashed_password: String,
+    pub dummy_hashed_password: SecretString,
     pub encryption_key: [u8; 32],
-    pub argon_pepper: String,
+    pub argon_pepper: SecretString,
 }

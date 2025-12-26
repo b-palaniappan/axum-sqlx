@@ -9,13 +9,13 @@ use crate::api::handler::passkey_handler::passkey_auth_routes;
 use crate::api::handler::totp_handler::totp_routes;
 use crate::api::handler::user_handler::user_routes;
 use crate::api::handler::welcome_handler::welcome_routes;
-use crate::config::app_config::{get_server_address, initialize_app_state, AppState};
+use crate::config::app_config::{AppState, get_server_address, initialize_app_state};
 use crate::db::entity::user::AccountStatus;
 use crate::error::error_model::ApiError;
-use axum::http::{header, HeaderValue, Method, StatusCode};
+use axum::http::{HeaderValue, Method, StatusCode, header};
+use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
-use axum::middleware::from_fn_with_state;
 use sqlx::types::chrono::Utc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
@@ -157,6 +157,7 @@ async fn main() {
         .nest("/passkey", passkey_auth_routes())
         .nest(
             "/mfa/totp",
+            // Setup middleware to require authentication
             totp_routes().route_layer(from_fn_with_state(
                 shared_state.clone(),
                 middleware::auth::require_auth,
@@ -164,6 +165,7 @@ async fn main() {
         )
         .nest(
             "/mfa",
+            // Setup middleware to require authentication
             mfa_routes().route_layer(from_fn_with_state(
                 shared_state.clone(),
                 middleware::auth::require_auth,

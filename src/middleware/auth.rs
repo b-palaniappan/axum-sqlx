@@ -2,10 +2,11 @@ use crate::cache::valkey_cache;
 use crate::config::app_config::AppState;
 use crate::error::error_model::{AppError, ErrorType};
 use axum::extract::State;
-use axum::http::{header, Request};
+use axum::http::{Request, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
+use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use sqlx::types::chrono::Utc;
 use std::sync::Arc;
@@ -79,11 +80,13 @@ pub async fn require_auth(
 
     let token_data = match decode::<JwtClaims>(
         token,
-        &DecodingKey::from_rsa_pem(state.jwt_public_key.as_bytes()).unwrap_or_else(|e| {
-            error!("Failed to parse public key: {:?}", e);
-            // Use an empty key to force decode failure
-            DecodingKey::from_rsa_components("", "").unwrap()
-        }),
+        &DecodingKey::from_rsa_pem(state.jwt_public_key.expose_secret().as_bytes()).unwrap_or_else(
+            |e| {
+                error!("Failed to parse public key: {:?}", e);
+                // Use an empty key to force decode failure
+                DecodingKey::from_rsa_components("", "").unwrap()
+            },
+        ),
         &validation,
     ) {
         Ok(td) => td,

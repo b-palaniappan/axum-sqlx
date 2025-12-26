@@ -1,20 +1,20 @@
+use axum::Router;
 use axum::body::Body;
 use axum::http::Request;
 use axum::response::Response;
-use axum::Router;
-use bb8_redis::bb8::Pool;
 use bb8_redis::RedisConnectionManager;
+use bb8_redis::bb8::Pool;
 use nanoid::nanoid;
 use sqlx::postgres::PgPoolOptions;
 use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 use tower::ServiceExt;
-use webauthn_rs::prelude::Url;
 use webauthn_rs::WebauthnBuilder;
+use webauthn_rs::prelude::Url;
 
-use axum_sqlx::api::handler::user_handler::user_routes;
 use axum_sqlx::AppState;
+use axum_sqlx::api::handler::user_handler::user_routes;
 
 pub async fn setup_test_app() -> Router {
     // Load environment variables
@@ -101,14 +101,14 @@ pub async fn setup_test_app_state() -> Arc<AppState> {
         pg_pool,
         redis_pool,
         webauthn,
-        hmac_key: test_hmac_key,
-        jwt_private_key,
-        jwt_public_key,
+        hmac_key: test_hmac_key.into(),
+        jwt_private_key: jwt_private_key.into(),
+        jwt_public_key: jwt_public_key.into(),
         jwt_expiration,
         jwt_issuer,
-        dummy_hashed_password,
+        dummy_hashed_password: dummy_hashed_password.into(),
         encryption_key,
-        argon_pepper,
+        argon_pepper: argon_pepper.into(),
     })
 }
 

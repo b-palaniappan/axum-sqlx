@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use sqlx::types::chrono::{DateTime, Utc};
-use sqlx::types::JsonValue;
 use sqlx::FromRow;
+use sqlx::types::JsonValue;
+use sqlx::types::chrono::{DateTime, Utc};
 
 /// Represents totp credentials associated with a user Multi-factor authentication (MFA).
 #[derive(Debug, FromRow)]

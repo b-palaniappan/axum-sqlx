@@ -11,16 +11,17 @@ use crate::service::{email, sms};
 use crate::util::crypto_helper;
 use crate::util::crypto_helper::hash_password_sign_with_hmac;
 use argon2::PasswordVerifier;
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
-use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use futures::future::join_all;
 use hmac::Mac;
-use rand_chacha::rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use rand_chacha::rand_core::{RngCore, SeedableRng};
+use secrecy::ExposeSecret;
 use std::sync::Arc;
 use totp_rs::{Algorithm, TOTP};
 use tracing::{error, info};
@@ -385,7 +386,7 @@ pub async fn validate_backup_code(
         if let Ok(parsed_hash) = argon2::PasswordHash::new(&code_record.backup_code_hash) {
             // Setup Argon2 with the application's pepper
             let argon2 = argon2::Argon2::new_with_secret(
-                &state.argon_pepper.as_bytes(),
+                state.argon_pepper.expose_secret().as_bytes(),
                 argon2::Algorithm::Argon2id,
                 argon2::Version::V0x13,
                 argon2::Params::default(),
@@ -405,14 +406,16 @@ pub async fn validate_backup_code(
             {
                 // Verify the HMAC for tamper protection
                 type HmacSha512 = hmac::Hmac<sha2::Sha512>;
-                let mut mac = <HmacSha512 as hmac::Mac>::new_from_slice(&state.hmac_key.as_bytes())
-                    .map_err(|_| {
-                        error!("Failed to initialize HMAC");
-                        AppError::new(
-                            ErrorType::InternalServerError,
-                            "Failed to process backup code verification",
-                        )
-                    })?;
+                let mut mac = <HmacSha512 as hmac::Mac>::new_from_slice(
+                    state.hmac_key.expose_secret().as_bytes(),
+                )
+                .map_err(|_| {
+                    error!("Failed to initialize HMAC");
+                    AppError::new(
+                        ErrorType::InternalServerError,
+                        "Failed to process backup code verification",
+                    )
+                })?;
 
                 mac.update(code_record.backup_code_hash.as_bytes());
                 if mac.verify_slice(&code_record.backup_code_hmac).is_ok() {

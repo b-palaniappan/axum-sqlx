@@ -1,6 +1,6 @@
 use serde_json::Value as JsonValue;
-use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::FromRow;
+use sqlx::types::chrono::{DateTime, Utc};
 use webauthn_rs::prelude::{CredentialID, Passkey};
 
 /// Represents a passkey credential associated with a user.

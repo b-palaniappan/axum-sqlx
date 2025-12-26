@@ -1,8 +1,8 @@
+use crate::AccountStatus;
 use crate::db::entity::auth::RefreshTokenStatus;
 use crate::db::entity::user::Users;
-use crate::AccountStatus;
-use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::PgPool;
+use sqlx::types::chrono::{DateTime, Utc};
 
 /// Retrieves a user by their email address from the database.
 ///

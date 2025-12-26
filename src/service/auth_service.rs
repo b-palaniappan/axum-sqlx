@@ -1,3 +1,4 @@
+use crate::AppState;
 use crate::api::model::auth::{
     ForgotPasswordRequest, ForgotPasswordResponse, LogoutRequest, PasskeyAuthenticationRequest,
     PasskeyRegistrationRequest, RefreshRequest, ResetPasswordRequest, ResetPasswordResponse,
@@ -16,22 +17,22 @@ use crate::service::email;
 use crate::util::crypto_helper::{
     hash_password_sign_with_hmac, run_fake_password_hash_check, verify_password_hash_hmac,
 };
-use crate::AppState;
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::prelude::BASE64_URL_SAFE;
-use base64::Engine;
 use jsonwebtoken::jwk::{Jwk, JwkSet, KeyAlgorithm, KeyOperations, PublicKeyUse};
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use nanoid::nanoid;
 use openssl::pkey::PKey;
 use openssl::rsa::Rsa;
+use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
-use sqlx::types::chrono::Utc;
 use sqlx::PgPool;
+use sqlx::types::chrono::Utc;
 use std::ops::Add;
 use std::string::ToString;
 use std::sync::Arc;
@@ -80,7 +81,7 @@ pub async fn validate_token(
         ));
     }
     let token = token_request.token;
-    let public_key = state.jwt_public_key.clone();
+    let public_key = state.jwt_public_key.expose_secret();
     let mut validation = Validation::new(Algorithm::RS256);
     validation.set_audience(&["api"]);
     let token_data = decode::<Claims>(
@@ -284,7 +285,7 @@ async fn generate_access_token(
     let token = encode(
         &header,
         &user_claim,
-        &EncodingKey::from_rsa_pem(&state.jwt_private_key.as_bytes()).unwrap(),
+        &EncodingKey::from_rsa_pem(state.jwt_private_key.expose_secret().as_bytes()).unwrap(),
     )
     .unwrap();
 
@@ -541,13 +542,14 @@ pub async fn refresh_token(
 /// * There is an error converting the RSA key to a PKey.
 pub async fn get_jwks(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
     // Return the public key for JWT token validation.
-    let rsa = Rsa::public_key_from_pem(&state.jwt_public_key.as_bytes()).map_err(|e| {
-        error!("Error converting public key to RSA: {:?}", e);
-        AppError::new(
-            ErrorType::InternalServerError,
-            "Something went wrong. Please try again later.",
-        )
-    })?;
+    let rsa =
+        Rsa::public_key_from_pem(state.jwt_public_key.expose_secret().as_bytes()).map_err(|e| {
+            error!("Error converting public key to RSA: {:?}", e);
+            AppError::new(
+                ErrorType::InternalServerError,
+                "Something went wrong. Please try again later.",
+            )
+        })?;
     let public_key = PKey::from_rsa(rsa).map_err(|e| {
         error!("Error converting RSA to PKey: {:?}", e);
         AppError::new(
@@ -641,7 +643,7 @@ pub async fn logout_user(
 ///
 /// * `String` - A URL-safe Base64 encoded string representing the unique identifier of the public key.
 fn get_public_key_id(State(state): State<Arc<AppState>>) -> String {
-    let hash = xxh3_64(state.jwt_public_key.as_bytes());
+    let hash = xxh3_64(state.jwt_public_key.expose_secret().as_bytes());
     let bytes = hash.to_be_bytes();
     URL_SAFE_NO_PAD.encode(&bytes)
 }

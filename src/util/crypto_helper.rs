@@ -7,10 +7,11 @@ use aes_gcm::{Aes256Gcm, Key, KeyInit};
 use argon2::password_hash::SaltString;
 use argon2::{Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
 use axum::response::Response;
-use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use hmac::{Hmac, Mac};
 use nanoid::nanoid;
+use secrecy::ExposeSecret;
 use sha2::Sha512;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -56,13 +57,13 @@ use tracing::error;
 ///     pg_pool: sqlx::postgres::PgPool::connect("postgres://localhost").await?,
 ///     redis_pool: bb8_redis::bb8::Pool::builder().build(bb8_redis::RedisConnectionManager::new("redis://localhost")?).await?,
 ///     webauthn: webauthn_rs::WebauthnBuilder::new("localhost", &webauthn_rs::prelude::Url::parse("http://localhost").unwrap()).unwrap().build().unwrap(),
-///     argon_pepper: "some_pepper".to_string(),
-///     hmac_key: "some_hmac_key".to_string(),
-///     jwt_private_key: "key".to_string(),
-///     jwt_public_key: "key".to_string(),
+///     argon_pepper: "some_pepper".to_string().into(),
+///     hmac_key: "some_hmac_key".to_string().into(),
+///     jwt_private_key: "key".to_string().into(),
+///     jwt_public_key: "key".to_string().into(),
 ///     jwt_expiration: 3600,
 ///     jwt_issuer: "test".to_string(),
-///     dummy_hashed_password: "test".to_string(),
+///     dummy_hashed_password: "test".to_string().into(),
 ///     encryption_key,
 /// });
 ///
@@ -84,7 +85,7 @@ pub async fn hash_password_sign_with_hmac(
 ) -> Result<(String, Vec<u8>), Box<dyn std::error::Error>> {
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::new_with_secret(
-        &state.argon_pepper.as_bytes(),
+        state.argon_pepper.expose_secret().as_bytes(),
         argon2::Algorithm::Argon2id,
         Version::V0x13,
         Params::default(),
@@ -103,7 +104,8 @@ pub async fn hash_password_sign_with_hmac(
 
     // Generate HMAC for password hash to detect tampering
     type HmacSha512 = Hmac<Sha512>;
-    let mut mac = <HmacSha512 as Mac>::new_from_slice(&state.hmac_key.as_bytes()).unwrap();
+    let mut mac =
+        <HmacSha512 as Mac>::new_from_slice(state.hmac_key.expose_secret().as_bytes()).unwrap();
     mac.update(password_hash.as_bytes());
     let password_hmac = mac.finalize().into_bytes().to_vec();
     Ok((password_hash, password_hmac))
@@ -142,13 +144,13 @@ pub async fn hash_password_sign_with_hmac(
 ///     pg_pool: sqlx::postgres::PgPool::connect("postgres://localhost").await?,
 ///     redis_pool: bb8_redis::bb8::Pool::builder().build(bb8_redis::RedisConnectionManager::new("redis://localhost")?).await?,
 ///     webauthn: webauthn_rs::WebauthnBuilder::new("localhost", &webauthn_rs::prelude::Url::parse("http://localhost").unwrap()).unwrap().build().unwrap(),
-///     argon_pepper: "some_pepper".to_string(),
-///     hmac_key: "test_key".to_string(),
-///     jwt_private_key: "key".to_string(),
-///     jwt_public_key: "key".to_string(),
+///     argon_pepper: "some_pepper".to_string().into(),
+///     hmac_key: "test_key".to_string().into(),
+///     jwt_private_key: "key".to_string().into(),
+///     jwt_public_key: "key".to_string().into(),
 ///     jwt_expiration: 3600,
 ///     jwt_issuer: "test".to_string(),
-///     dummy_hashed_password: "$argon2id$v=19$m=65536,t=2,p=1$...".to_string(),
+///     dummy_hashed_password: "$argon2id$v=19$m=65536,t=2,p=1$...".to_string().into(),
 ///     encryption_key,
 /// });
 ///
@@ -159,7 +161,7 @@ pub async fn hash_password_sign_with_hmac(
 /// ```
 pub async fn run_fake_password_hash_check(state: &Arc<AppState>) -> Result<Response, AppError> {
     let argon2 = Argon2::new_with_secret(
-        &state.argon_pepper.as_bytes(),
+        state.argon_pepper.expose_secret().as_bytes(),
         argon2::Algorithm::Argon2id,
         Version::V0x13,
         Params::default(),
@@ -168,8 +170,8 @@ pub async fn run_fake_password_hash_check(state: &Arc<AppState>) -> Result<Respo
 
     // Trigger a fake check to avoid returning immediately.
     // Which can be used by hacker to figure out user id is not valid.
-    let dummy_password_hash = state.dummy_hashed_password.clone();
-    let password_hash = PasswordHash::new(&*dummy_password_hash).unwrap();
+    let dummy_password_hash = state.dummy_hashed_password.expose_secret();
+    let password_hash = PasswordHash::new(dummy_password_hash).unwrap();
     let _ = argon2.verify_password("dummy".as_bytes(), &password_hash);
     Err(AppError::new(
         ErrorType::UnauthorizedError,
@@ -218,13 +220,13 @@ pub async fn run_fake_password_hash_check(state: &Arc<AppState>) -> Result<Respo
 ///     pg_pool: sqlx::postgres::PgPool::connect("postgres://localhost").await?,
 ///     redis_pool: bb8_redis::bb8::Pool::builder().build(bb8_redis::RedisConnectionManager::new("redis://localhost")?).await?,
 ///     webauthn: webauthn_rs::WebauthnBuilder::new("localhost", &webauthn_rs::prelude::Url::parse("http://localhost").unwrap()).unwrap().build().unwrap(),
-///     argon_pepper: "some_pepper".to_string(),
-///     hmac_key: "test_key".to_string(),
-///     jwt_private_key: "key".to_string(),
-///     jwt_public_key: "key".to_string(),
+///     argon_pepper: "some_pepper".to_string().into(),
+///     hmac_key: "test_key".to_string().into(),
+///     jwt_private_key: "key".to_string().into(),
+///     jwt_public_key: "key".to_string().into(),
 ///     jwt_expiration: 3600,
 ///     jwt_issuer: "test".to_string(),
-///     dummy_hashed_password: "test".to_string(),
+///     dummy_hashed_password: "test".to_string().into(),
 ///     encryption_key,
 /// });
 ///
@@ -256,7 +258,7 @@ pub async fn verify_password_hash_hmac(
     let pg_pool = &state.pg_pool;
     let parsed_hash = PasswordHash::new(password_hash).unwrap();
     let argon2 = Argon2::new_with_secret(
-        &state.argon_pepper.as_bytes(),
+        state.argon_pepper.expose_secret().as_bytes(),
         argon2::Algorithm::Argon2id,
         Version::V0x13,
         Params::default(),
@@ -284,7 +286,8 @@ pub async fn verify_password_hash_hmac(
     }
 
     type HmacSha512 = Hmac<Sha512>;
-    let mut mac = <HmacSha512 as Mac>::new_from_slice(state.hmac_key.as_bytes()).unwrap();
+    let mut mac =
+        <HmacSha512 as Mac>::new_from_slice(state.hmac_key.expose_secret().as_bytes()).unwrap();
     mac.update(password_hash.as_bytes());
     if mac.verify_slice(password_hmac).is_err() {
         error!("HMAC verification failed for user ID: {}", user_id);

@@ -1,5 +1,5 @@
-use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::FromRow;
+use sqlx::types::chrono::{DateTime, Utc};
 
 #[derive(Debug, FromRow)]
 #[allow(dead_code)]

@@ -2,7 +2,7 @@ use axum::http::{Method, StatusCode};
 use axum_sqlx::api::model::user::StoredUser;
 use axum_sqlx::db::repo::users_repository;
 use bytes::Bytes;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 mod common {
     pub use crate::helpers::*;
@@ -121,8 +121,10 @@ async fn test_create_user_validation_error() {
 
     let sub_error = &sub_errors[0];
     assert_eq!(sub_error["field"].as_str().unwrap(), "password");
-    assert!(sub_error["message"]
-        .as_str()
-        .unwrap()
-        .contains("Password must be between"));
+    assert!(
+        sub_error["message"]
+            .as_str()
+            .unwrap()
+            .contains("Password must be between")
+    );
 }

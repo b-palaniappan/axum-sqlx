@@ -75,18 +75,21 @@ pub async fn require_auth(
     };
 
     // 2) Decode and validate JWT
-    let mut validation = Validation::new(Algorithm::RS256);
+    let mut validation = Validation::new(Algorithm::EdDSA);
     validation.set_audience(&["api"]);
 
     let token_data = match decode::<JwtClaims>(
         token,
-        &DecodingKey::from_rsa_pem(state.jwt_public_key.expose_secret().as_bytes()).unwrap_or_else(
-            |e| {
+        &match DecodingKey::from_ed_pem(state.jwt_public_key.expose_secret().as_bytes()) {
+            Ok(key) => key,
+            Err(e) => {
                 error!("Failed to parse public key: {:?}", e);
-                // Use an empty key to force decode failure
-                DecodingKey::from_rsa_components("", "").unwrap()
-            },
-        ),
+                return AppError::new(
+                    ErrorType::InternalServerError,
+                    "Key configuration error",
+                ).into_response();
+            }
+        },
         &validation,
     ) {
         Ok(td) => td,

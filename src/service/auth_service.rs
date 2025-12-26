@@ -28,7 +28,6 @@ use jsonwebtoken::jwk::{Jwk, JwkSet, KeyAlgorithm, KeyOperations, PublicKeyUse};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use nanoid::nanoid;
 use openssl::pkey::PKey;
-use openssl::rsa::Rsa;
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -82,11 +81,11 @@ pub async fn validate_token(
     }
     let token = token_request.token;
     let public_key = state.jwt_public_key.expose_secret();
-    let mut validation = Validation::new(Algorithm::RS256);
+    let mut validation = Validation::new(Algorithm::EdDSA);
     validation.set_audience(&["api"]);
     let token_data = decode::<Claims>(
         &token,
-        &DecodingKey::from_rsa_pem(public_key.as_bytes()).unwrap(),
+        &DecodingKey::from_ed_pem(public_key.as_bytes()).unwrap(),
         &validation,
     );
     match token_data {
@@ -280,12 +279,12 @@ async fn generate_access_token(
             .add(Duration::from_secs(state.jwt_expiration.clone()))
             .timestamp(),
     };
-    let mut header = Header::new(Algorithm::RS256);
+    let mut header = Header::new(Algorithm::EdDSA);
     header.kid = Some(get_public_key_id(State(state.clone())));
     let token = encode(
         &header,
         &user_claim,
-        &EncodingKey::from_rsa_pem(state.jwt_private_key.expose_secret().as_bytes()).unwrap(),
+        &EncodingKey::from_ed_pem(state.jwt_private_key.expose_secret().as_bytes()).unwrap(),
     )
     .unwrap();
 
@@ -542,38 +541,38 @@ pub async fn refresh_token(
 /// * There is an error converting the RSA key to a PKey.
 pub async fn get_jwks(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
     // Return the public key for JWT token validation.
-    let rsa =
-        Rsa::public_key_from_pem(state.jwt_public_key.expose_secret().as_bytes()).map_err(|e| {
-            error!("Error converting public key to RSA: {:?}", e);
-            AppError::new(
-                ErrorType::InternalServerError,
-                "Something went wrong. Please try again later.",
-            )
-        })?;
-    let public_key = PKey::from_rsa(rsa).map_err(|e| {
-        error!("Error converting RSA to PKey: {:?}", e);
+    let public_key = PKey::public_key_from_pem(state.jwt_public_key.expose_secret().as_bytes()).map_err(|e| {
+        error!("Error converting public key from PEM: {:?}", e);
         AppError::new(
             ErrorType::InternalServerError,
             "Something went wrong. Please try again later.",
         )
     })?;
 
-    let n = BASE64_URL_SAFE.encode(&public_key.rsa().unwrap().n().to_vec());
-    let e = BASE64_URL_SAFE.encode(&public_key.rsa().unwrap().e().to_vec());
+    // Extract the raw public key bytes for EdDSA
+    let raw_public_key = public_key.raw_public_key().map_err(|e| {
+        error!("Error extracting raw public key: {:?}", e);
+        AppError::new(
+            ErrorType::InternalServerError,
+            "Something went wrong. Please try again later.",
+        )
+    })?;
+
+    let x = BASE64_URL_SAFE.encode(&raw_public_key);
 
     let jwk = Jwk {
         common: jsonwebtoken::jwk::CommonParameters {
             public_key_use: Some(PublicKeyUse::Signature),
             key_operations: Some(vec![KeyOperations::Verify, KeyOperations::Sign]),
-            key_algorithm: Some(KeyAlgorithm::RS256),
+            key_algorithm: Some(KeyAlgorithm::EdDSA),
             key_id: Some(get_public_key_id(State(state))),
             ..Default::default()
         },
-        algorithm: jsonwebtoken::jwk::AlgorithmParameters::RSA(
-            jsonwebtoken::jwk::RSAKeyParameters {
-                n,
-                e,
-                ..Default::default()
+        algorithm: jsonwebtoken::jwk::AlgorithmParameters::OctetKeyPair(
+            jsonwebtoken::jwk::OctetKeyPairParameters {
+                key_type: jsonwebtoken::jwk::OctetKeyPairType::OctetKeyPair,
+                curve: jsonwebtoken::jwk::EllipticCurve::Ed25519,
+                x,
             },
         ),
     };

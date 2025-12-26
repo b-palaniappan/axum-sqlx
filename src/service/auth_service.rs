@@ -541,13 +541,14 @@ pub async fn refresh_token(
 /// * There is an error converting the RSA key to a PKey.
 pub async fn get_jwks(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
     // Return the public key for JWT token validation.
-    let public_key = PKey::public_key_from_pem(state.jwt_public_key.expose_secret().as_bytes()).map_err(|e| {
-        error!("Error converting public key from PEM: {:?}", e);
-        AppError::new(
-            ErrorType::InternalServerError,
-            "Something went wrong. Please try again later.",
-        )
-    })?;
+    let public_key = PKey::public_key_from_pem(state.jwt_public_key.expose_secret().as_bytes())
+        .map_err(|e| {
+            error!("Error converting public key from PEM: {:?}", e);
+            AppError::new(
+                ErrorType::InternalServerError,
+                "Something went wrong. Please try again later.",
+            )
+        })?;
 
     // Extract the raw public key bytes for EdDSA
     let raw_public_key = public_key.raw_public_key().map_err(|e| {

@@ -84,10 +84,8 @@ pub async fn require_auth(
             Ok(key) => key,
             Err(e) => {
                 error!("Failed to parse public key: {:?}", e);
-                return AppError::new(
-                    ErrorType::InternalServerError,
-                    "Key configuration error",
-                ).into_response();
+                return AppError::new(ErrorType::InternalServerError, "Key configuration error")
+                    .into_response();
             }
         },
         &validation,

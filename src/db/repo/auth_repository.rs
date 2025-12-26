@@ -110,7 +110,7 @@ pub async fn get_user_by_id(pool: &PgPool, user_id: &i64) -> Result<Users, sqlx:
     let user = sqlx::query_as!(
         Users,
         r#"
-        SELECT id, key, first_name, last_name, email, email_verified, account_status as "account_status: AccountStatus", 
+        SELECT id, key, first_name, last_name, email, email_verified, account_status as "account_status: AccountStatus",
                last_login, failed_login_attempts, created_at, updated_at, deleted_at
         FROM users WHERE id = $1
         "#,
@@ -347,7 +347,7 @@ pub async fn update_user_password(
 ) -> Result<(), sqlx::Error> {
     // First, mark any existing password credentials as deleted
     sqlx::query!(
-        "UPDATE user_login_credentials SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 and deleted_at IS NULL",
+        "UPDATE user_login_credentials SET deleted_at = CURRENT_TIMESTAMP WHERE user_id = $1 and deleted_at IS NULL",
         user_id
     )
     .execute(pool)

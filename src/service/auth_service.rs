@@ -663,7 +663,7 @@ fn get_public_key_id(State(state): State<Arc<AppState>>) -> String {
 /// * `jti` - The unique identifier for the token.
 /// * `aud` - The audience for the token, typically the intended recipient.
 /// * `iat` - The issued at time, in seconds since the epoch.
-/// * `nbf` - The not before time, in seconds since the epoch.
+/// * `nbf` - Not before time, in seconds since the epoch.
 /// * `exp` - The expiration time, in seconds since the epoch.
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {

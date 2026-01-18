@@ -75,3 +75,17 @@
 ## TODO
 - `Verify TOTP MFA` should return a valid JWT token if the TOTP is valid.
 - `/mfa/totp/validate-backup/:userKey` should return a valid JWT token if the backup code is valid.
+
+## For Production Ready
+Here are production‑readiness improvements I’d prioritize for this app, ordered by impact/risk:
+
+- Security & secrets: move all secrets to a proper secret manager (Vault/AWS/GCP), rotate keys, avoid .env in prod, and enforce strong JWT/refresh token policies.
+- Auth hardening: add rate limiting + brute‑force protection, account lockouts, token revocation on password reset, and audit logs for auth events.
+- Observability: structured logs with request IDs, tracing spans across services, metrics (latency, error rates, DB/Redis ops), and alerting dashboards.
+- Resilience: graceful shutdown, request timeouts per handler, retry/backoff on DB/Redis, and circuit‑breaking for downstream calls (email/SMS).
+- Data safety: DB migrations in CI/CD, backup/restore plan, indexes for hot queries, and a clear schema/versioning strategy.
+- Testing & CI/CD: integration tests wired into pipeline, load tests for auth endpoints, security scans (SAST + dependency audit).
+- Operational hardening: TLS termination, strict CORS policy, rate limits at gateway, and WAF rules for auth endpoints.
+- Configuration: structured config validation at startup, sane defaults per environment, and a health/readiness endpoint.
+- Caching discipline: explicit cache eviction on logout/token revoke, bounded TTLs, and cache key versioning.
+- Monitoring MFA/Passkeys: track registration failures, replay attempts, and suspicious patterns.

@@ -52,11 +52,20 @@ rand_chacha = "^0" # Secure Random number generator
 secrecy = { version = "^0", features = ["serde"] } # Secure handling of secret values
 
 # Async
-tokio = { version = "^1.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "^1.0", features = ["macros", "rt-multi-thread", "signal"] }
 
 # Logging and tracing
 tracing = "^0"
-tracing-subscriber = { version = "^0", features = ["env-filter"] }
+tracing-subscriber = { version = "^0", features = ["env-filter", "json", "registry"] }
+
+# OpenTelemetry
+opentelemetry = { version = "^0", features = ["trace", "metrics", "logs"] }
+opentelemetry_sdk = { version = "^0", features = ["rt-tokio", "trace", "metrics", "logs"] }
+opentelemetry-otlp = { version = "^0", features = ["trace", "metrics", "logs", "grpc-tonic", "tls", "tls-roots"] }
+tracing-opentelemetry = "^0"
+opentelemetry-appender-tracing = "^0"
+opentelemetry-semantic-conventions = "^0"
+opentelemetry-http = "^0"
 
 # Validation
 validator = { version = "^0", features = ["derive"] }

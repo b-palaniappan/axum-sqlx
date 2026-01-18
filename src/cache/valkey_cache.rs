@@ -25,6 +25,14 @@ use tracing::error;
 /// * There is an error obtaining a Redis connection from the pool.
 /// * There is an error serializing the value to a JSON string.
 /// * There is an error setting the value in the Redis cache.
+#[tracing::instrument(
+    skip(state, value),
+    fields(
+        cache.system = "redis",
+        cache.operation = "SET",
+        cache.key = %key
+    )
+)]
 pub async fn set_object<T>(
     State(state): State<Arc<AppState>>,
     key: &String,
@@ -67,6 +75,15 @@ where
 /// * There is an error obtaining a Redis connection from the pool.
 /// * There is an error serializing the value to a JSON string.
 /// * There is an error setting the value in the Redis cache with the specified TTL.
+#[tracing::instrument(
+    skip(state, value),
+    fields(
+        cache.system = "redis",
+        cache.operation = "SETEX",
+        cache.key = %key,
+        cache.ttl = ttl
+    )
+)]
 pub async fn set_object_with_ttl<T>(
     State(state): State<Arc<AppState>>,
     key: &String,
@@ -108,6 +125,15 @@ where
 /// * There is an error obtaining a Redis connection from the pool.
 /// * There is an error retrieving the value from the Redis cache.
 /// * There is an error deserializing the value from a JSON string.
+#[tracing::instrument(
+    skip(state),
+    fields(
+        cache.system = "redis",
+        cache.operation = "GET",
+        cache.key = %key,
+        cache.hit = tracing::field::Empty
+    )
+)]
 pub async fn get_object<T>(
     State(state): State<Arc<AppState>>,
     key: &String,
@@ -124,13 +150,16 @@ where
         e
     })?;
 
+    let span = tracing::Span::current();
     if let Some(json_str) = json_string {
+        span.record("cache.hit", true);
         let value: T = serde_json::from_str(&json_str).map_err(|e| {
             error!("Failed to deserialize value: {}", e);
             e
         })?;
         Ok(Some(value))
     } else {
+        span.record("cache.hit", false);
         Ok(None)
     }
 }
@@ -151,6 +180,14 @@ where
 /// This function will return an error if:
 /// * There is an error obtaining a Redis connection from the pool.
 /// * There is an error deleting the value from the Redis cache.
+#[tracing::instrument(
+    skip(state),
+    fields(
+        cache.system = "redis",
+        cache.operation = "DEL",
+        cache.key = %key
+    )
+)]
 pub async fn delete_object(
     State(state): State<Arc<AppState>>,
     key: &String,

@@ -65,6 +65,7 @@ use tracing::error;
 ///     jwt_issuer: "test".to_string(),
 ///     dummy_hashed_password: "test".to_string().into(),
 ///     encryption_key,
+///     meter: None,
 /// });
 ///
 /// let password = "my_secure_password".to_string();
@@ -152,6 +153,7 @@ pub async fn hash_password_sign_with_hmac(
 ///     jwt_issuer: "test".to_string(),
 ///     dummy_hashed_password: "$argon2id$v=19$m=65536,t=2,p=1$...".to_string().into(),
 ///     encryption_key,
+///     meter: None,
 /// });
 ///
 /// let result = run_fake_password_hash_check(&state).await;
@@ -228,6 +230,7 @@ pub async fn run_fake_password_hash_check(state: &Arc<AppState>) -> Result<Respo
 ///     jwt_issuer: "test".to_string(),
 ///     dummy_hashed_password: "test".to_string().into(),
 ///     encryption_key,
+///     meter: None,
 /// });
 ///
 /// let user_id = 123;

@@ -29,6 +29,14 @@ use validator::Validate;
 ///
 /// Returns a `Result` containing a `Response` with the created user data,
 /// or an `AppError` on failure.
+#[tracing::instrument(
+    skip(state),
+    fields(
+        service.name = "user_service",
+        service.operation = "create_user",
+        user.email = %user_request.email
+    )
+)]
 #[utoipa::path(
     post,
     path = "/users",

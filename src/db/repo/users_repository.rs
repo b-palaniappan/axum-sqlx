@@ -25,6 +25,14 @@ use sqlx::PgPool;
 ///
 /// This function will return an `Error` if:
 /// * There is an issue executing the SQL query.
+#[tracing::instrument(
+    skip(pg_pool),
+    fields(
+        db.system = "postgresql",
+        db.operation = "INSERT",
+        db.table = "users"
+    )
+)]
 pub async fn create_user(
     pg_pool: &PgPool,
     user_key: &String,
@@ -69,6 +77,14 @@ pub async fn create_user(
 ///
 /// This function will return an `Error` if:
 /// * There is an issue executing the SQL query.
+#[tracing::instrument(
+    skip(pool),
+    fields(
+        db.system = "postgresql",
+        db.operation = "SELECT",
+        db.table = "users"
+    )
+)]
 pub async fn get_users(pool: &PgPool, limit: i64, page: i64) -> Result<Vec<Users>, Error> {
     sqlx::query_as!(
         Users,
@@ -101,6 +117,14 @@ pub async fn get_users(pool: &PgPool, limit: i64, page: i64) -> Result<Vec<Users
 ///
 /// This function will return an `Error` if:
 /// * There is an issue executing the SQL query.
+#[tracing::instrument(
+    skip(pool),
+    fields(
+        db.system = "postgresql",
+        db.operation = "SELECT",
+        db.table = "users"
+    )
+)]
 pub async fn count_users(pool: &PgPool) -> Result<i64, Error> {
     let count = sqlx::query!("SELECT COUNT(*) FROM users")
         .fetch_one(pool)
@@ -128,6 +152,14 @@ pub async fn count_users(pool: &PgPool) -> Result<i64, Error> {
 /// This function will return an `Error` if:
 /// * There is an issue executing the SQL query.
 /// * The user does not exist.
+#[tracing::instrument(
+    skip(pool),
+    fields(
+        db.system = "postgresql",
+        db.operation = "SELECT",
+        db.table = "users"
+    )
+)]
 pub async fn get_user_by_key(pool: &PgPool, key: &str) -> Result<Users, Error> {
     sqlx::query_as!(
         Users,
@@ -163,6 +195,14 @@ pub async fn get_user_by_key(pool: &PgPool, key: &str) -> Result<Users, Error> {
 /// This function will return an `Error` if:
 /// * There is an issue executing the SQL query.
 /// * The user does not exist.
+#[tracing::instrument(
+    skip(pool),
+    fields(
+        db.system = "postgresql",
+        db.operation = "UPDATE",
+        db.table = "users"
+    )
+)]
 pub async fn update_user(
     pool: &PgPool,
     key: &String,
@@ -212,6 +252,14 @@ pub async fn update_user(
 /// This function will return an `Error` if:
 /// * There is an issue executing the SQL query.
 /// * The user does not exist or is already marked as deleted.
+#[tracing::instrument(
+    skip(pool),
+    fields(
+        db.system = "postgresql",
+        db.operation = "UPDATE",
+        db.table = "users"
+    )
+)]
 pub async fn delete_user(pool: &PgPool, key: &str) -> Result<(), Error> {
     let result = sqlx::query_as!(
         Users,

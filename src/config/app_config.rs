@@ -110,6 +110,17 @@ pub async fn initialize_app_state() -> Arc<AppState> {
         .build()
         .expect("Invalid configuration");
 
+    // Initialize OpenTelemetry meter if metrics are enabled
+    let meter = if env::var("OTEL_ENABLE_METRICS")
+        .unwrap_or_else(|_| "true".to_string())
+        .parse::<bool>()
+        .unwrap_or(true)
+    {
+        Some(opentelemetry::global::meter("axum-sqlx"))
+    } else {
+        None
+    };
+
     Arc::new(AppState {
         pg_pool,
         redis_pool,
@@ -122,6 +133,7 @@ pub async fn initialize_app_state() -> Arc<AppState> {
         dummy_hashed_password,
         encryption_key,
         argon_pepper,
+        meter,
     })
 }
 
@@ -151,4 +163,5 @@ pub struct AppState {
     pub dummy_hashed_password: SecretString,
     pub encryption_key: [u8; 32],
     pub argon_pepper: SecretString,
+    pub meter: Option<opentelemetry::metrics::Meter>,
 }

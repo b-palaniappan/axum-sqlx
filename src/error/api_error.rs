@@ -8,6 +8,12 @@ use tracing::info;
 impl IntoResponse for AppError {
     // implementation for the trait.
     fn into_response(self) -> Response {
+        // Record error in current span
+        let span = tracing::Span::current();
+        span.record("error", true);
+        span.record("error.message", &self.error_message.as_str());
+        span.record("error.type", &self.error_type.to_string().as_str());
+
         let (status, message, debug_message, sub_errors) = match self.error_type.clone() {
             ErrorType::NotFound => (
                 StatusCode::NOT_FOUND,

@@ -45,6 +45,10 @@ use webauthn_rs::prelude::{
 };
 use xxhash_rust::xxh3::xxh3_64;
 
+// Constants for token expiration
+/// Refresh token expiration time in seconds (10 days)
+const REFRESH_TOKEN_EXPIRATION_SECS: u64 = 60 * 60 * 24 * 10;
+
 /// Validates a JWT token using the public key.
 ///
 /// This function validates the provided JWT token by decoding it using the public key.
@@ -295,7 +299,6 @@ async fn generate_access_token(
         StatusCode::OK,
         Json(TokenResponse {
             access_token: token,
-            refresh_token: refresh_token.to_string(),
             token_type: "Bearer".to_string(),
             expires_in: state.jwt_expiration as i64,
         }),
@@ -307,7 +310,7 @@ async fn generate_access_token(
         axum::http::header::SET_COOKIE,
         format!(
             "refresh_token={}; HttpOnly; Secure; SameSite=Strict; Max-Age={}",
-            refresh_token, state.jwt_expiration
+            refresh_token, REFRESH_TOKEN_EXPIRATION_SECS
         )
         .parse()
         .unwrap(),
@@ -422,7 +425,7 @@ async fn generate_persist_refresh_token(
 
     // Generate and persist new token
     let refresh_token = nanoid!(32);
-    let refresh_token_expiry = Utc::now() + Duration::from_secs(60 * 60 * 24 * 10);
+    let refresh_token_expiry = Utc::now() + Duration::from_secs(REFRESH_TOKEN_EXPIRATION_SECS);
 
     auth_repository::add_refresh_token(
         &state.pg_pool,

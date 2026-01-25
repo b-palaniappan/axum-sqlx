@@ -86,9 +86,14 @@ async fn authenticate_user(app: Router, email: &str, password: &str) -> (String,
     let response_json: Value = serde_json::from_slice(&bytes).unwrap();
 
     let access_token = response_json["accessToken"].as_str().unwrap().to_string();
-    let refresh_token = response_json["refreshToken"].as_str().unwrap().to_string();
 
-    (access_token, refresh_token)
+    // Verify refresh_token is NOT in the JSON response (security: prevent XSS exposure)
+    assert!(
+        response_json.get("refreshToken").is_none(),
+        "refresh_token should not be in JSON response body to prevent XSS exposure"
+    );
+
+    (access_token, String::new()) // Return empty string for refresh_token (it's in HttpOnly cookie)
 }
 
 /// Helper to make an authenticated request

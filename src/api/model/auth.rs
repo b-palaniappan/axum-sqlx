@@ -48,8 +48,6 @@ pub struct TokenResponse {
         example = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
     )]
     pub access_token: String,
-    #[schema(example = "Eyixd6RrJ2E8LF98Xv29j5AyYBYvTrof")]
-    pub refresh_token: String,
     #[schema(example = "Bearer")]
     pub token_type: String,
     #[schema(example = "3600")]

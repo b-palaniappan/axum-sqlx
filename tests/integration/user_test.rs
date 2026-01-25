@@ -128,3 +128,97 @@ async fn test_create_user_validation_error() {
             .contains("Password must be between")
     );
 }
+
+#[tokio::test]
+async fn test_update_user_with_empty_request_should_fail() {
+    // Set up the test application
+    let app = common::setup_test_app().await;
+
+    // Create a user first
+    let test_email = common::get_test_email();
+    let user_data = json!({
+        "firstName": "Test",
+        "lastName": "User",
+        "email": test_email,
+        "password": "SecurePassword123!"
+    });
+
+    let response =
+        common::make_request(app.clone(), Method::POST, "/users", Some(user_data.to_string())).await;
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let bytes = hyper_body_to_bytes(response.into_body()).await;
+    let response_json: Value = serde_json::from_slice(&bytes).unwrap();
+    let user_key = response_json["key"].as_str().unwrap();
+
+    // Try to update with empty request (no fields to update)
+    let empty_update = json!({});
+
+    let update_response = common::make_request(
+        app,
+        Method::PATCH,
+        &format!("/users/{}", user_key),
+        Some(empty_update.to_string()),
+    )
+    .await;
+
+    // Should return 400 Bad Request for empty update
+    assert_eq!(update_response.status(), StatusCode::BAD_REQUEST);
+
+    let bytes = hyper_body_to_bytes(update_response.into_body()).await;
+    let error_response: Value = serde_json::from_slice(&bytes).unwrap();
+
+    // Verify we have an error message about empty update
+    let debug_message = error_response["debugMessage"].as_str().unwrap();
+    assert!(debug_message.to_lowercase().contains("at least one field"));
+}
+
+#[tokio::test]
+async fn test_update_user_with_valid_fields() {
+    // Set up the test application
+    let app = common::setup_test_app().await;
+
+    // Create a user first
+    let test_email = common::get_test_email();
+    let user_data = json!({
+        "firstName": "Original",
+        "lastName": "Name",
+        "email": test_email,
+        "password": "SecurePassword123!"
+    });
+
+    let response =
+        common::make_request(app.clone(), Method::POST, "/users", Some(user_data.to_string())).await;
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let bytes = hyper_body_to_bytes(response.into_body()).await;
+    let response_json: Value = serde_json::from_slice(&bytes).unwrap();
+    let user_key = response_json["key"].as_str().unwrap();
+
+    // Update with valid fields
+    let update_request = json!({
+        "firstName": "Updated",
+        "lastName": "User"
+    });
+
+    let update_response = common::make_request(
+        app,
+        Method::PATCH,
+        &format!("/users/{}", user_key),
+        Some(update_request.to_string()),
+    )
+    .await;
+
+    // Should return 200 OK
+    assert_eq!(update_response.status(), StatusCode::OK);
+
+    let bytes = hyper_body_to_bytes(update_response.into_body()).await;
+    let updated_user: Value = serde_json::from_slice(&bytes).unwrap();
+
+    // Verify the update worked
+    assert_eq!(updated_user["firstName"].as_str().unwrap(), "Updated");
+    assert_eq!(updated_user["lastName"].as_str().unwrap(), "User");
+    assert_eq!(updated_user["email"].as_str().unwrap(), test_email);
+}

@@ -158,23 +158,25 @@ pub async fn get_users(
     let limit = pagination.size;
     let users = users_repository::get_users(&state.pg_pool, limit, page).await;
 
-    let count = users_repository::count_users(&state.pg_pool).await;
-    let items_in_page = users.as_ref().unwrap().len();
-    let user_count = count.unwrap_or_else(|_| 0);
-
     match users {
-        Ok(users) => Ok((
-            StatusCode::OK,
-            Json(StoredUsers {
-                users: users.into_iter().map(|u| StoredUser::from(u)).collect(),
-                current_page: page,
-                total_items: user_count,
-                total_pages: (user_count as f64 / limit as f64).ceil() as i64,
-                items_per_page: limit,
-                items_in_page: items_in_page as i64,
-            }),
-        )
-            .into_response()),
+        Ok(users) => {
+            let count = users_repository::count_users(&state.pg_pool).await;
+            let items_in_page = users.len();
+            let user_count = count.unwrap_or_else(|_| 0);
+
+            Ok((
+                StatusCode::OK,
+                Json(StoredUsers {
+                    users: users.into_iter().map(|u| StoredUser::from(u)).collect(),
+                    current_page: page,
+                    total_items: user_count,
+                    total_pages: (user_count as f64 / limit as f64).ceil() as i64,
+                    items_per_page: limit,
+                    items_in_page: items_in_page as i64,
+                }),
+            )
+                .into_response())
+        }
         Err(_) => Err(AppError::new(
             ErrorType::InternalServerError,
             "Error getting users",
@@ -257,6 +259,14 @@ pub async fn update_user(
     key: String,
     update_user_request: UpdateUserRequest,
 ) -> Result<Response, AppError> {
+    // Validate that at least one field is provided for update
+    if update_user_request.first_name.is_none() && update_user_request.last_name.is_none() {
+        return Err(AppError::new(
+            ErrorType::BadRequest,
+            "At least one field must be provided to update the user.",
+        ));
+    }
+
     let result = users_repository::update_user(&state.pg_pool, &key, update_user_request).await;
 
     match result {

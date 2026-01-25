@@ -19,6 +19,14 @@ use sqlx::types::chrono::{DateTime, Utc};
 /// # Errors
 ///
 /// This function will return an error if the query fails or if no user is found with the given email address.
+#[tracing::instrument(
+    skip(pool),
+    fields(
+        db.system = "postgresql",
+        db.operation = "SELECT",
+        db.table = "users"
+    )
+)]
 pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Users, sqlx::Error> {
     let user = sqlx::query_as!(
         Users,
@@ -223,6 +231,14 @@ pub async fn revoke_refresh_token(pool: &PgPool, token: String) -> Result<(), sq
 /// # Errors
 ///
 /// This function will return an error if the query fails.
+#[tracing::instrument(
+    skip(pool, token),
+    fields(
+        db.system = "postgresql",
+        db.operation = "INSERT",
+        db.table = "refresh_tokens"
+    )
+)]
 pub async fn add_refresh_token(
     pool: &PgPool,
     user_id: i64,

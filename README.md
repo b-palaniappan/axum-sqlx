@@ -68,3 +68,23 @@ cargo test -- --nocapture
 ```
 
 Note: Integration tests require a running PostgreSQL database and Redis instance. The tests will use the database connection specified in the `TEST_DATABASE_URL` environment variable, or will fall back to `DATABASE_URL` if not specified.
+
+## Running OpenTelemetry LGTM
+- LGTM stands for Loki, Grafana, Tempo, and Prometheus - for metrics (the “M”).
+- Run the OpenTelemetry LGTM in Docker using the following command:
+```bash
+podman run -p 3300:3000 -p 4317:4317 -p 4318:4318 --rm -ti grafana/otel-lgtm
+```
+- `4317` - OTLP gRPC port
+- `4318` - OTLP HTTP port
+- `3000` - Grafana UI port
+
+### Other Ports
+```
+Open ports:
+ - 4317: OpenTelemetry GRPC endpoint
+ - 4318: OpenTelemetry HTTP endpoint
+ - 3000: Grafana (http://localhost:3000). User: admin, password: admin
+ - 4040: Pyroscope endpoint
+ - 9090: Prometheus endpoint
+```

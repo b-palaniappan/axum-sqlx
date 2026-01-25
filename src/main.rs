@@ -13,15 +13,17 @@ use crate::config::app_config::{AppState, get_server_address, initialize_app_sta
 use crate::db::entity::user::AccountStatus;
 use crate::error::error_model::ApiError;
 use axum::http::{HeaderValue, Method, StatusCode, header};
-use axum::middleware::from_fn_with_state;
+use axum::middleware::{from_fn, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
+use opentelemetry::trace::TracerProvider;
 use sqlx::types::chrono::Utc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tower_http::timeout::TimeoutLayer;
 use tracing::info;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 use utoipa_scalar::{Scalar, Servable};
@@ -38,16 +40,73 @@ mod db {
 }
 mod error;
 mod middleware;
+mod observability;
 mod service;
 mod util;
 
 #[tokio::main]
 async fn main() {
-    // Logging handler using tracing.
-    tracing_subscriber::fmt().init();
-
-    // Load environment variables from .env file.
+    // Load environment variables from .env file first.
     dotenvy::dotenv().ok();
+
+    // Load OTEL configuration
+    let otel_config = config::otel_config::load_otel_config();
+
+    // Initialize OTEL providers
+    let tracer_provider = observability::tracing::init_tracer_provider(&otel_config).ok();
+    let _meter_provider = observability::metrics::init_meter_provider(&otel_config).ok();
+    let logger_provider = observability::logs::init_logger_provider(&otel_config).ok();
+
+    // Setup tracing subscriber with OTLP layers
+    match (tracer_provider, logger_provider) {
+        (Some(provider), Some(logger_provider)) => {
+            // Both traces and logs enabled
+            let tracer = provider.tracer("axum-sqlx");
+            let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+            let logs_layer = opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&logger_provider);
+
+            tracing_subscriber::registry()
+                .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+                .with(telemetry_layer)
+                .with(logs_layer)
+                .with(tracing_subscriber::fmt::layer())
+                .init();
+
+            // Store logger provider to keep it alive
+            std::mem::forget(logger_provider);
+        }
+        (Some(provider), None) => {
+            // Only traces enabled
+            let tracer = provider.tracer("axum-sqlx");
+            let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+
+            tracing_subscriber::registry()
+                .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+                .with(telemetry_layer)
+                .with(tracing_subscriber::fmt::layer())
+                .init();
+        }
+        (None, Some(logger_provider)) => {
+            // Only logs enabled
+            let logs_layer = opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&logger_provider);
+
+            tracing_subscriber::registry()
+                .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+                .with(logs_layer)
+                .with(tracing_subscriber::fmt::layer())
+                .init();
+
+            // Store logger provider to keep it alive
+            std::mem::forget(logger_provider);
+        }
+        (None, None) => {
+            // If OTEL is disabled, just use basic logging
+            tracing_subscriber::registry()
+                .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+                .with(tracing_subscriber::fmt::layer())
+                .init();
+        }
+    }
     let server_addr = get_server_address().await;
 
     // Initialize the application state.
@@ -187,6 +246,7 @@ async fn main() {
         .fallback(page_not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .with_state(shared_state)
+        .layer(from_fn(middleware::otel_middleware::trace_layer))
         .layer(CompressionLayer::new())
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .layer(cors);
@@ -195,10 +255,48 @@ async fn main() {
     let server_address: SocketAddr = server_addr.parse().unwrap();
     info!("Starting server at {}", server_addr);
     let listener = tokio::net::TcpListener::bind(server_address).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+
+    // Start server with graceful shutdown
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .unwrap();
+
+    // Shutdown OTEL providers
+    info!("Shutting down OpenTelemetry providers");
+    // Note: In OpenTelemetry SDK 0.26+, providers should be shut down individually
+    // by calling .shutdown() on each provider instance. If needed, store the providers
+    // in AppState for proper shutdown handling.
 }
 
-// -- ---------------------r
+/// Handle shutdown signal for graceful shutdown
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    info!("Shutdown signal received, starting graceful shutdown");
+}
+
+// -- ---------------------
 // -- Error Handlers
 // -- ---------------------
 async fn page_not_found() -> Response {

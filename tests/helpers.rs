@@ -109,6 +109,7 @@ pub async fn setup_test_app_state() -> Arc<AppState> {
         dummy_hashed_password: dummy_hashed_password.into(),
         encryption_key,
         argon_pepper: argon_pepper.into(),
+        meter: None,
     })
 }
 

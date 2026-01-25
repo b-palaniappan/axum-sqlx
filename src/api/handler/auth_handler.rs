@@ -1,12 +1,13 @@
 use crate::api::model::auth::{
-    ForgotPasswordRequest, ForgotPasswordResponse, LogoutRequest, RefreshRequest,
+    ForgotPasswordRequest, ForgotPasswordResponse, LogoutResponse, RefreshRequest,
     ResetPasswordRequest, ResetPasswordResponse, TokenRequest, TokenResponse,
 };
 use crate::api::model::user::UserAuthRequest;
 use crate::config::app_config::AppState;
 use crate::error::error_model::{ApiError, AppError};
+use crate::middleware::auth::AuthContext;
 use crate::service::auth_service;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::response::Response;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -14,7 +15,6 @@ use axum_extra::TypedHeader;
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::{Authorization, Cookie};
 use std::sync::Arc;
-use tracing::info;
 
 /// Defines the authentication routes for the application.
 ///
@@ -24,16 +24,30 @@ use tracing::info;
 /// # Returns
 ///
 /// A `Router` instance configured with the authentication routes.
-pub fn auth_routes() -> Router<Arc<AppState>> {
+/// Public authentication routes (no auth required)
+pub fn public_auth_routes() -> Router<Arc<AppState>> {
     Router::new()
         // .route("/register", post(register_handler))
         .route("/login", post(authenticate_handler))
         .route("/refresh", post(refresh_token_handler))
         .route("/jwks", get(jwks_handler))
-        .route("/logout", delete(logout_handler))
         .route("/validate", post(validate_token_handler))
         .route("/forgot-password", post(forgot_password_handler))
         .route("/reset-password", post(reset_password_handler))
+}
+
+/// Protected authentication routes (auth required)
+pub fn protected_auth_routes() -> Router<Arc<AppState>> {
+    Router::new().route("/logout", delete(logout_handler))
+}
+
+/// All authentication routes (for backward compatibility)
+/// Note: This includes both public and protected routes.
+/// Protected routes should have middleware applied in main.rs
+pub fn auth_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .merge(public_auth_routes())
+        .merge(protected_auth_routes())
 }
 
 // Authentication handler.
@@ -129,33 +143,27 @@ async fn jwks_handler(State(state): State<Arc<AppState>>) -> Result<Response, Ap
 /// Logout user
 ///
 /// Logout user and invalidate their tokens.
+/// This endpoint requires authentication - the user's identity is extracted from the JWT token.
 #[utoipa::path(
     delete,
     path = "/auth/logout",
     tag = "Authentication",
-    request_body = LogoutRequest,
     responses(
-        (status = 200, description = "Logout successful"),
+        (status = 200, description = "Logout successful", body = LogoutResponse),
         (status = 401, description = "Unauthorized error", body = ApiError),
-        (status = 422, description = "Unprocessable request", body = ApiError),
         (status = 500, description = "Internal server error", body = ApiError),
     )
 )]
 async fn logout_handler(
     State(state): State<Arc<AppState>>,
-    TypedHeader(Authorization(bearer)): TypedHeader<Authorization<Bearer>>,
-    TypedHeader(cookie): TypedHeader<Cookie>,
-    Json(logout_request): Json<LogoutRequest>,
+    Extension(auth_context): Extension<AuthContext>,
 ) -> Result<Response, AppError> {
-    // Extract the token from the authorization header
-    let token = bearer.token();
+    // Extract the authenticated user's key from the AuthContext
+    // This is set by the require_auth middleware and cannot be spoofed
+    let user_key = auth_context.user_key;
 
-    // Extract cookies
-    let cookies = cookie.get("refresh_token");
-    info!("token: {:?} | Cookies: {:?}", token, cookies);
-
-    // Call service method.
-    auth_service::logout_user(State(state), Json(logout_request)).await
+    // Call service method with the authenticated user's key
+    auth_service::logout_user(State(state), user_key).await
 }
 
 /// Forgot password

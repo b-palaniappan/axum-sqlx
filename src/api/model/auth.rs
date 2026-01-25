@@ -85,6 +85,13 @@ pub struct LogoutRequest {
     pub user_key: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LogoutResponse {
+    #[schema(example = "Logout successful")]
+    pub message: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ForgotPasswordRequest {

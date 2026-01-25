@@ -1,6 +1,6 @@
 use crate::AppState;
 use crate::api::model::auth::{
-    ForgotPasswordRequest, ForgotPasswordResponse, LogoutRequest, PasskeyAuthenticationRequest,
+    ForgotPasswordRequest, ForgotPasswordResponse, LogoutResponse, PasskeyAuthenticationRequest,
     PasskeyRegistrationRequest, RefreshRequest, ResetPasswordRequest, ResetPasswordResponse,
     TokenRequest, TokenResponse,
 };
@@ -584,35 +584,26 @@ pub async fn get_jwks(State(state): State<Arc<AppState>>) -> Result<Response, Ap
 
 pub async fn logout_user(
     State(state): State<Arc<AppState>>,
-    Json(logout_request): Json<LogoutRequest>,
+    user_key: String,
 ) -> Result<Response, AppError> {
-    // Step 1: Validate the logout request
-    if let Err(e) = logout_request.validate() {
-        return Err(AppError::new(
-            ErrorType::RequestValidationError {
-                validation_error: e,
-                object: "LogoutRequest".to_string(),
-            },
-            "Validation error. Check the request body.",
-        ));
-    }
-
-    let user_key = logout_request.user_key;
     let pg_pool = &state.pg_pool;
 
-    // Step 2: Look up the user ID from the user key
-    // This would typically be a DB call, but for now we assume the user key is provided
-    // In a real implementation with middleware, you'd use the authenticated user context
-    // Since we don't have get_user_by_key function, we'll use email instead as a workaround
-    let user = match auth_repository::get_user_by_email(pg_pool, &user_key).await {
+    // Step 1: Look up the user ID from the user key (authenticated by middleware)
+    let user = match users_repository::get_user_by_key(pg_pool, &user_key).await {
         Ok(user) => user,
         Err(_) => {
             // Even if user doesn't exist, return success to prevent user enumeration
-            return Ok((StatusCode::OK, "Logout successful").into_response());
+            return Ok((
+                StatusCode::OK,
+                Json(LogoutResponse {
+                    message: "Logout successful".to_string(),
+                }),
+            )
+                .into_response());
         }
     };
 
-    // Step 3: Revoke all refresh tokens for the user
+    // Step 2: Revoke all refresh tokens for the user
     match auth_repository::logout_user(pg_pool, user.id).await {
         Ok(_) => (),
         Err(e) => {
@@ -621,13 +612,19 @@ pub async fn logout_user(
         }
     }
 
-    // Step 4: Remove the JWT token from cache
+    // Step 3: Remove the JWT token from cache (invalidates access token)
     if let Err(e) = valkey_cache::delete_object(State(state.clone()), &user_key).await {
         error!("Error removing JWT from cache: {:?}", e);
         // Continue with logout even if cache deletion fails
     }
 
-    Ok((StatusCode::OK, "Logout successful").into_response())
+    Ok((
+        StatusCode::OK,
+        Json(LogoutResponse {
+            message: "Logout successful".to_string(),
+        }),
+    )
+        .into_response())
 }
 
 /// Generates a unique identifier for the public key.

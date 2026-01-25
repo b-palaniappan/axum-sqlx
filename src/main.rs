@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::string::ToString;
 use std::time::Duration;
 
-use crate::api::handler::auth_handler::auth_routes;
+use crate::api::handler::auth_handler::{protected_auth_routes, public_auth_routes};
 use crate::api::handler::cache_handler::cache_routes;
 use crate::api::handler::mfa_handler::mfa_routes;
 use crate::api::handler::passkey_handler::passkey_auth_routes;
@@ -159,6 +159,7 @@ async fn main() {
             error::error_model::ValidationError,
             api::model::user::UserAuthRequest,
             api::model::auth::TokenResponse,
+            api::model::auth::LogoutResponse,
             api::model::mfa::EmailMfaRegisterRequest,
             api::model::mfa::EmailMfaRegisterResponse,
             api::model::mfa::EmailMfaVerifyRequest,
@@ -210,7 +211,15 @@ async fn main() {
     // build our application with a route
     let app = Router::new()
         .nest("/welcome", welcome_routes())
-        .nest("/auth", auth_routes())
+        .nest("/auth", public_auth_routes())
+        .nest(
+            "/auth",
+            // Protected auth routes require authentication
+            protected_auth_routes().route_layer(from_fn_with_state(
+                shared_state.clone(),
+                middleware::auth::require_auth,
+            )),
+        )
         .nest("/users", user_routes())
         .nest("/cache", cache_routes())
         .nest("/passkey", passkey_auth_routes())

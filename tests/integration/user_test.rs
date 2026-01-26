@@ -143,8 +143,13 @@ async fn test_update_user_with_empty_request_should_fail() {
         "password": "SecurePassword123!"
     });
 
-    let response =
-        common::make_request(app.clone(), Method::POST, "/users", Some(user_data.to_string())).await;
+    let response = common::make_request(
+        app.clone(),
+        Method::POST,
+        "/users",
+        Some(user_data.to_string()),
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -188,8 +193,13 @@ async fn test_update_user_with_valid_fields() {
         "password": "SecurePassword123!"
     });
 
-    let response =
-        common::make_request(app.clone(), Method::POST, "/users", Some(user_data.to_string())).await;
+    let response = common::make_request(
+        app.clone(),
+        Method::POST,
+        "/users",
+        Some(user_data.to_string()),
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::CREATED);
 

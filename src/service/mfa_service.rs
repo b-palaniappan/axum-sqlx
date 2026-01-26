@@ -75,7 +75,7 @@ pub async fn register_totp(
 
     // Encrypt the TOTP secret before storing
     let (nonce, encrypted_secret) =
-        crypto_helper::aes_gcm_encrypt(encryption_key, secret_str.as_bytes())
+        crypto_helper::xchacha20_poly1305_encrypt(encryption_key, secret_str.as_bytes())
             .await
             .map_err(|e| {
                 error!("Failed to encrypt TOTP secret: {:?}", e);
@@ -158,7 +158,7 @@ pub async fn validate_totp(
     let encryption_key = &state.encryption_key;
 
     // Decrypt the TOTP secret
-    let decrypted_secret = crypto_helper::aes_gcm_decrypt(
+    let decrypted_secret = crypto_helper::xchacha20_poly1305_decrypt(
         encryption_key,
         &totp_secret.nonce,
         &totp_secret.encrypted_secret,

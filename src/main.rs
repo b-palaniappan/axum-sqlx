@@ -63,7 +63,9 @@ async fn main() {
             // Both traces and logs enabled
             let tracer = provider.tracer("axum-sqlx");
             let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-            let logs_layer = opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&logger_provider);
+            let logs_layer = opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(
+                &logger_provider,
+            );
 
             tracing_subscriber::registry()
                 .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
@@ -88,7 +90,9 @@ async fn main() {
         }
         (None, Some(logger_provider)) => {
             // Only logs enabled
-            let logs_layer = opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&logger_provider);
+            let logs_layer = opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(
+                &logger_provider,
+            );
 
             tracing_subscriber::registry()
                 .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))

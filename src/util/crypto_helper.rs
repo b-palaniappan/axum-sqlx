@@ -1,14 +1,14 @@
 use crate::config::app_config::AppState;
 use crate::db::repo::auth_repository;
 use crate::error::error_model::{AppError, ErrorType};
-use aes_gcm::aead::rand_core::RngCore;
-use aes_gcm::aead::{Aead, OsRng};
-use aes_gcm::{Aes256Gcm, Key, KeyInit};
 use argon2::password_hash::SaltString;
 use argon2::{Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
 use axum::response::Response;
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
+use chacha20poly1305::aead::rand_core::RngCore;
+use chacha20poly1305::aead::{Aead, OsRng};
+use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, XNonce};
 use hmac::{Hmac, Mac};
 use nanoid::nanoid;
 use secrecy::ExposeSecret;
@@ -377,7 +377,7 @@ pub async fn handle_user_authentication_failed(
     Ok(())
 }
 
-/// Encrypts the given plaintext using AES-256-GCM encryption.
+/// Encrypts the given plaintext using XChaCha20-Poly1305 encryption.
 ///
 /// # Arguments
 ///
@@ -387,7 +387,7 @@ pub async fn handle_user_authentication_failed(
 /// # Returns
 ///
 /// A `Result` containing a tuple with two `String` values:
-/// - The first `String` is the Base64 URL-safe encoded nonce.
+/// - The first `String` is the Base64 URL-safe encoded nonce (24 bytes).
 /// - The second `String` is the Base64 URL-safe encoded ciphertext with the authentication tag appended.
 ///
 /// # Errors
@@ -399,12 +399,12 @@ pub async fn handle_user_authentication_failed(
 /// # Example
 ///
 /// ```rust,no_run
-/// # use axum_sqlx::util::crypto_helper::aes_gcm_encrypt;
+/// # use axum_sqlx::util::crypto_helper::xchacha20_poly1305_encrypt;
 /// #
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let key: [u8; 32] = [0; 32];
 /// let plaintext = b"Hello, world!";
-/// let result = aes_gcm_encrypt(&key, plaintext).await;
+/// let result = xchacha20_poly1305_encrypt(&key, plaintext).await;
 /// match result {
 ///     Ok((nonce, ciphertext)) => {
 ///         println!("Nonce: {}", nonce);
@@ -415,7 +415,7 @@ pub async fn handle_user_authentication_failed(
 /// # Ok(())
 /// # }
 /// ```
-pub async fn aes_gcm_encrypt(
+pub async fn xchacha20_poly1305_encrypt(
     key_byte: &[u8; 32],
     plaintext: &[u8],
 ) -> Result<(String, String), Box<dyn std::error::Error>> {
@@ -423,16 +423,16 @@ pub async fn aes_gcm_encrypt(
         return Err("Key must be exactly 32 bytes long".into());
     }
 
-    let key = Key::<Aes256Gcm>::from_slice(key_byte);
-    let cipher = Aes256Gcm::new(key);
+    let key = Key::from_slice(key_byte);
+    let cipher = XChaCha20Poly1305::new(key);
 
-    let mut nonce_bytes = [0u8; 12];
+    let mut nonce_bytes = [0u8; 24];
     OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = aes_gcm::Nonce::from_slice(&nonce_bytes);
+    let nonce = XNonce::from_slice(&nonce_bytes);
 
     let ciphertext_with_tag = cipher
         .encrypt(nonce, plaintext.as_ref())
-        .map_err(|e| format!("Decryption failed: {}", e))?;
+        .map_err(|e| format!("Encryption failed: {}", e))?;
 
     Ok((
         BASE64_URL_SAFE_NO_PAD.encode(&nonce_bytes),
@@ -440,12 +440,12 @@ pub async fn aes_gcm_encrypt(
     ))
 }
 
-/// Decrypts the given ciphertext using AES-256-GCM decryption.
+/// Decrypts the given ciphertext using XChaCha20-Poly1305 decryption.
 ///
 /// # Arguments
 ///
 /// * `key_byte` - A 32-byte array representing the decryption key. The key must be exactly 32 bytes long.
-/// * `nonce` - A `String` containing the Base64 URL-safe encoded nonce. The nonce must be exactly 12 bytes long after decoding.
+/// * `nonce` - A `String` containing the Base64 URL-safe encoded nonce. The nonce must be exactly 24 bytes long after decoding.
 /// * `ciphertext_with_tag` - A `String` containing the Base64 URL-safe encoded ciphertext with the authentication tag appended.
 ///
 /// # Returns
@@ -456,20 +456,20 @@ pub async fn aes_gcm_encrypt(
 ///
 /// Returns a `Box<dyn std::error::Error>` if:
 /// - The key is not 32 bytes long.
-/// - The nonce is not 12 bytes long after decoding.
+/// - The nonce is not 24 bytes long after decoding.
 /// - Decoding the nonce or ciphertext fails.
 /// - Decryption fails.
 ///
 /// # Example
 ///
 /// ```rust,no_run
-/// # use axum_sqlx::util::crypto_helper::aes_gcm_decrypt;
+/// # use axum_sqlx::util::crypto_helper::xchacha20_poly1305_decrypt;
 /// #
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let key: [u8; 32] = [0; 32];
 /// let nonce = "Base64EncodedNonce".to_string();
 /// let ciphertext = "Base64EncodedCiphertext".to_string();
-/// let result = aes_gcm_decrypt(&key, &nonce, &ciphertext).await;
+/// let result = xchacha20_poly1305_decrypt(&key, &nonce, &ciphertext).await;
 /// match result {
 ///     Ok(plaintext) => println!("Decrypted plaintext: {:?}", plaintext),
 ///     Err(e) => eprintln!("Decryption failed: {}", e),
@@ -477,7 +477,7 @@ pub async fn aes_gcm_encrypt(
 /// # Ok(())
 /// # }
 /// ```
-pub async fn aes_gcm_decrypt(
+pub async fn xchacha20_poly1305_decrypt(
     key_byte: &[u8; 32],
     nonce: &String,
     ciphertext_with_tag: &String,
@@ -487,16 +487,16 @@ pub async fn aes_gcm_decrypt(
     }
 
     let decoded_nonce = BASE64_URL_SAFE_NO_PAD.decode(nonce)?;
-    if decoded_nonce.len() != 12 {
-        return Err("Nonce must be exactly 12 bytes long".into());
+    if decoded_nonce.len() != 24 {
+        return Err("Nonce must be exactly 24 bytes long".into());
     }
 
     let decoded_ciphertext = BASE64_URL_SAFE_NO_PAD.decode(ciphertext_with_tag)?;
 
-    let key = Key::<Aes256Gcm>::from_slice(key_byte);
-    let cipher = Aes256Gcm::new(key);
+    let key = Key::from_slice(key_byte);
+    let cipher = XChaCha20Poly1305::new(key);
 
-    let nonce = aes_gcm::Nonce::from_slice(&decoded_nonce);
+    let nonce = XNonce::from_slice(&decoded_nonce);
 
     let plaintext = cipher
         .decrypt(nonce, decoded_ciphertext.as_ref())

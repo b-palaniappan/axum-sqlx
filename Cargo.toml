@@ -87,6 +87,7 @@ futures = "^0"
 regex = "^1"
 chrono = "^0"
 rand = "^0"
+tonic = "^0"
 
 # For testing
 [dev-dependencies]

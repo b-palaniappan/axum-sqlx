@@ -1,5 +1,5 @@
 use opentelemetry::{KeyValue, global};
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
 use opentelemetry_sdk::{
     Resource,
     metrics::{PeriodicReader, SdkMeterProvider},
@@ -37,12 +37,24 @@ pub fn init_meter_provider(
         ])
         .build();
 
+    let mut metadata = tonic::metadata::MetadataMap::new();
+    metadata.insert(
+        "signoz-ingestion-key",
+        tonic::metadata::MetadataValue::try_from("umcDCbdXthAp5pqkr2phWMbt42vEjUnfxwlx").unwrap(),
+    );
+
     // Configure the OTLP exporter
-    let exporter = opentelemetry_otlp::MetricExporter::builder()
+    let mut exporter_builder = opentelemetry_otlp::MetricExporter::builder()
         .with_tonic()
         .with_endpoint(&config.otlp_endpoint)
-        .with_timeout(Duration::from_secs(10))
-        .build()?;
+        .with_metadata(metadata)
+        .with_timeout(Duration::from_secs(10));
+    if config.otlp_endpoint.starts_with("https://") {
+        exporter_builder = exporter_builder.with_tls_config(
+            tonic::transport::ClientTlsConfig::new().with_native_roots(),
+        );
+    }
+    let exporter = exporter_builder.build()?;
 
     // Configure periodic reader with 30-second interval
     let reader = PeriodicReader::builder(exporter)

@@ -50,9 +50,8 @@ pub fn init_tracer_provider(
         .with_metadata(metadata)
         .with_timeout(Duration::from_secs(10));
     if config.otlp_endpoint.starts_with("https://") {
-        exporter_builder = exporter_builder.with_tls_config(
-            tonic::transport::ClientTlsConfig::new().with_native_roots(),
-        );
+        exporter_builder = exporter_builder
+            .with_tls_config(tonic::transport::ClientTlsConfig::new().with_native_roots());
     }
     let exporter = exporter_builder.build()?;
 

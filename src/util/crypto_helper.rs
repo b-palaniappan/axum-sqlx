@@ -9,6 +9,7 @@ use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use chacha20poly1305::aead::rand_core::RngCore;
 use chacha20poly1305::aead::{Aead, OsRng};
 use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, XNonce};
+use hmac::digest::KeyInit as HmacKeyInit;
 use hmac::{Hmac, Mac};
 use nanoid::nanoid;
 use secrecy::ExposeSecret;
@@ -105,8 +106,10 @@ pub async fn hash_password_sign_with_hmac(
 
     // Generate HMAC for password hash to detect tampering
     type HmacSha512 = Hmac<Sha512>;
-    let mut mac =
-        <HmacSha512 as Mac>::new_from_slice(state.hmac_key.expose_secret().as_bytes()).unwrap();
+    let mut mac = <HmacSha512 as HmacKeyInit>::new_from_slice(
+        state.hmac_key.expose_secret().as_bytes(),
+    )
+    .unwrap();
     mac.update(password_hash.as_bytes());
     let password_hmac = mac.finalize().into_bytes().to_vec();
     Ok((password_hash, password_hmac))
@@ -289,8 +292,10 @@ pub async fn verify_password_hash_hmac(
     }
 
     type HmacSha512 = Hmac<Sha512>;
-    let mut mac =
-        <HmacSha512 as Mac>::new_from_slice(state.hmac_key.expose_secret().as_bytes()).unwrap();
+    let mut mac = <HmacSha512 as HmacKeyInit>::new_from_slice(
+        state.hmac_key.expose_secret().as_bytes(),
+    )
+    .unwrap();
     mac.update(password_hash.as_bytes());
     if mac.verify_slice(password_hmac).is_err() {
         error!("HMAC verification failed for user ID: {}", user_id);

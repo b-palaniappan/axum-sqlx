@@ -406,7 +406,7 @@ pub async fn validate_backup_code(
             {
                 // Verify the HMAC for tamper protection
                 type HmacSha512 = hmac::Hmac<sha2::Sha512>;
-                let mut mac = <HmacSha512 as hmac::Mac>::new_from_slice(
+                let mut mac = <HmacSha512 as hmac::KeyInit>::new_from_slice(
                     state.hmac_key.expose_secret().as_bytes(),
                 )
                 .map_err(|_| {

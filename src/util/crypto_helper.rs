@@ -8,7 +8,7 @@ use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use chacha20poly1305::aead::rand_core::RngCore;
 use chacha20poly1305::aead::{Aead, OsRng};
-use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, XNonce};
+use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
 use hmac::digest::KeyInit as HmacKeyInit;
 use hmac::{Hmac, Mac};
 use nanoid::nanoid;
@@ -106,10 +106,9 @@ pub async fn hash_password_sign_with_hmac(
 
     // Generate HMAC for password hash to detect tampering
     type HmacSha512 = Hmac<Sha512>;
-    let mut mac = <HmacSha512 as HmacKeyInit>::new_from_slice(
-        state.hmac_key.expose_secret().as_bytes(),
-    )
-    .unwrap();
+    let mut mac =
+        <HmacSha512 as HmacKeyInit>::new_from_slice(state.hmac_key.expose_secret().as_bytes())
+            .unwrap();
     mac.update(password_hash.as_bytes());
     let password_hmac = mac.finalize().into_bytes().to_vec();
     Ok((password_hash, password_hmac))
@@ -292,10 +291,9 @@ pub async fn verify_password_hash_hmac(
     }
 
     type HmacSha512 = Hmac<Sha512>;
-    let mut mac = <HmacSha512 as HmacKeyInit>::new_from_slice(
-        state.hmac_key.expose_secret().as_bytes(),
-    )
-    .unwrap();
+    let mut mac =
+        <HmacSha512 as HmacKeyInit>::new_from_slice(state.hmac_key.expose_secret().as_bytes())
+            .unwrap();
     mac.update(password_hash.as_bytes());
     if mac.verify_slice(password_hmac).is_err() {
         error!("HMAC verification failed for user ID: {}", user_id);
@@ -428,15 +426,15 @@ pub async fn xchacha20_poly1305_encrypt(
         return Err("Key must be exactly 32 bytes long".into());
     }
 
-    let key = Key::from_slice(key_byte);
-    let cipher = XChaCha20Poly1305::new(key);
+    let cipher = XChaCha20Poly1305::new_from_slice(key_byte)
+        .map_err(|e| format!("Invalid XChaCha20-Poly1305 key: {}", e))?;
 
     let mut nonce_bytes = [0u8; 24];
     OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = XNonce::from_slice(&nonce_bytes);
+    let nonce = XNonce::from(nonce_bytes);
 
     let ciphertext_with_tag = cipher
-        .encrypt(nonce, plaintext.as_ref())
+        .encrypt(&nonce, plaintext.as_ref())
         .map_err(|e| format!("Encryption failed: {}", e))?;
 
     Ok((
@@ -498,13 +496,17 @@ pub async fn xchacha20_poly1305_decrypt(
 
     let decoded_ciphertext = BASE64_URL_SAFE_NO_PAD.decode(ciphertext_with_tag)?;
 
-    let key = Key::from_slice(key_byte);
-    let cipher = XChaCha20Poly1305::new(key);
+    let cipher = XChaCha20Poly1305::new_from_slice(key_byte)
+        .map_err(|e| format!("Invalid XChaCha20-Poly1305 key: {}", e))?;
 
-    let nonce = XNonce::from_slice(&decoded_nonce);
+    let decoded_nonce: [u8; 24] = decoded_nonce
+        .as_slice()
+        .try_into()
+        .map_err(|_| "Nonce must be exactly 24 bytes long")?;
+    let nonce = XNonce::from(decoded_nonce);
 
     let plaintext = cipher
-        .decrypt(nonce, decoded_ciphertext.as_ref())
+        .decrypt(&nonce, decoded_ciphertext.as_ref())
         .map_err(|e| format!("Decryption failed: {}", e))?;
 
     Ok(plaintext)

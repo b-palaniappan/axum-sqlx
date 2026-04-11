@@ -10,6 +10,7 @@ pub mod db {
     pub mod repo;
 }
 pub mod error;
+pub mod grpc;
 pub mod middleware;
 pub mod service;
 pub mod util;

@@ -52,6 +52,24 @@ pub async fn create_user(
     state: Arc<AppState>,
     user_request: UserRequest,
 ) -> Result<Response, AppError> {
+    let stored_user = create_user_record(state, user_request).await?;
+    let location = format!("/users/{}", stored_user.key.as_str());
+
+    Ok((
+        StatusCode::CREATED,
+        [(header::LOCATION, location)],
+        Json(stored_user),
+    )
+        .into_response())
+}
+
+/// Create a new user record and return the created user object.
+///
+/// This function contains the shared registration logic used by REST and gRPC controllers.
+pub async fn create_user_record(
+    state: Arc<AppState>,
+    user_request: UserRequest,
+) -> Result<StoredUser, AppError> {
     match user_request.validate() {
         Ok(_) => (),
         Err(e) => {
@@ -102,17 +120,12 @@ pub async fn create_user(
             })?;
 
             // Successfully created user and stored credentials
-            Ok((
-                StatusCode::CREATED,
-                [(header::LOCATION, format!("/users/{}", user.key))],
-                Json(StoredUser {
-                    key: user.key,
-                    first_name: user.first_name,
-                    last_name: user.last_name,
-                    email: user.email,
-                }),
-            )
-                .into_response())
+            Ok(StoredUser {
+                key: user.key,
+                first_name: user.first_name,
+                last_name: user.last_name,
+                email: user.email,
+            })
         }
         Err(e) => {
             error!("Error creating user. {:?}", e);

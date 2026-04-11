@@ -1,8 +1,8 @@
 use crate::db::entity::mfa::{TotpSecret, UserMfaTotp};
 use crate::error::error_model::{AppError, ErrorType};
 use chrono::Duration;
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use rand_chacha::rand_core::{RngCore, SeedableRng};
 use sqlx::postgres::PgQueryResult;
 use sqlx::types::JsonValue;
 use sqlx::types::chrono::Utc;

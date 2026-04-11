@@ -1,0 +1,345 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --page-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+  --surface: rgba(255, 255, 255, 0.95);
+  --card-gradient: linear-gradient(160deg, rgba(255, 255, 255, 0.97), rgba(245, 247, 255, 0.92));
+  --text-primary: #2d3748;
+  --text-secondary: #4a5568;
+  --border: rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 25px 60px rgba(0, 0, 0, 0.15);
+  --accent: #5a67d8;
+}
+
+body {
+  font-family: "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--page-gradient);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+body[data-page="login"] .container {
+  background: var(--surface);
+  backdrop-filter: blur(20px);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+  width: 100%;
+  max-width: 480px;
+}
+
+body[data-page="login"] .header {
+  padding: 40px 40px 0;
+  text-align: center;
+}
+
+body[data-page="login"] .title {
+  font-size: 32px;
+  font-weight: 700;
+  background: var(--primary-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 8px;
+  letter-spacing: -0.5px;
+}
+
+body[data-page="login"] .subtitle {
+  color: var(--text-secondary);
+  font-size: 16px;
+  font-weight: 400;
+}
+
+body[data-page="login"] .tabs {
+  display: flex;
+  margin: 30px 40px 0;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 8px;
+  padding: 6px;
+  gap: 8px;
+}
+
+body[data-page="login"] .tab {
+  flex: 1;
+  padding: 14px 20px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+}
+
+body[data-page="login"] .tab.active {
+  background: white;
+  color: var(--text-primary);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+}
+
+body[data-page="login"] .tab:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.5);
+  color: var(--text-primary);
+}
+
+body[data-page="login"] .form-container {
+  padding: 40px;
+}
+
+body[data-page="login"] .form-group {
+  margin-bottom: 24px;
+}
+
+body[data-page="login"] .label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  letter-spacing: 0.25px;
+}
+
+body[data-page="login"] .input {
+  width: 100%;
+  padding: 16px 20px;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  font-size: 16px;
+  color: var(--text-primary);
+  background: white;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  outline: none;
+}
+
+body[data-page="login"] .input:focus {
+  border-color: #a78bfa;
+  box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.1);
+  transform: translateY(-2px);
+}
+
+body[data-page="login"] .input::placeholder {
+  color: #a0aec0;
+}
+
+body[data-page="login"] .button {
+  width: 100%;
+  padding: 16px 24px;
+  background: var(--primary-gradient);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+  margin-top: 8px;
+}
+
+body[data-page="login"] .button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 35px rgba(102, 126, 234, 0.4);
+}
+
+body[data-page="login"] .button:active {
+  transform: translateY(0);
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+}
+
+body[data-page="login"] .flash-message {
+  margin: 20px 40px;
+  padding: 16px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: center;
+  display: none;
+}
+
+.hidden {
+  display: none !important;
+}
+
+body[data-page="login"] .toaster {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  padding: 16px 24px;
+  border-radius: 8px;
+  color: white;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.2);
+  transform: translateX(400px);
+  opacity: 0;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 1000;
+  max-width: 350px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+body[data-page="login"] .toaster-close {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 18px;
+  font-weight: bold;
+  cursor: pointer;
+  padding: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+}
+
+body[data-page="login"] .toaster-close:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+body[data-page="login"] .toaster.show {
+  transform: translateX(0);
+  opacity: 1;
+}
+
+body[data-page="login"] .toaster.success {
+  background: linear-gradient(135deg, #48bb78, #38a169);
+}
+
+body[data-page="login"] .toaster.error {
+  background: linear-gradient(135deg, #f56565, #e53e3e);
+}
+
+body[data-page="welcome"] {
+  color: var(--text-primary);
+}
+
+body[data-page="welcome"] .welcome-card {
+  width: 100%;
+  max-width: 640px;
+  border-radius: 24px;
+  padding: 48px 40px;
+  background: var(--card-gradient);
+  backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-lg);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+body[data-page="welcome"] .eyebrow {
+  display: inline-block;
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(90, 103, 216, 0.12);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+body[data-page="welcome"] .title {
+  font-size: clamp(32px, 6vw, 48px);
+  line-height: 1.05;
+  margin-bottom: 16px;
+}
+
+body[data-page="welcome"] .subtitle {
+  font-size: 18px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin-bottom: 28px;
+}
+
+body[data-page="welcome"] .identity {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(102, 126, 234, 0.14);
+  margin-bottom: 36px;
+}
+
+body[data-page="welcome"] .identity-label {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+body[data-page="welcome"] .identity-value {
+  font-size: 18px;
+  font-weight: 700;
+  word-break: break-word;
+}
+
+body[data-page="welcome"] .logout-link {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+body[data-page="welcome"] .logout-link:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 640px) {
+  body[data-page="login"] .container {
+    margin: 10px;
+    border-radius: 10px;
+  }
+
+  body[data-page="login"] .header,
+  body[data-page="login"] .form-container,
+  body[data-page="login"] .tabs {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+
+  body[data-page="login"] .title {
+    font-size: 28px;
+  }
+
+  body[data-page="login"] .toaster {
+    left: 20px;
+    right: 20px;
+    max-width: none;
+    transform: translateY(-100px);
+  }
+
+  body[data-page="login"] .toaster.show {
+    transform: translateY(0);
+  }
+
+  body[data-page="welcome"] .welcome-card {
+    padding: 36px 24px;
+    border-radius: 20px;
+  }
+
+  body[data-page="welcome"] .identity {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

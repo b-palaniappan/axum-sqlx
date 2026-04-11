@@ -11,9 +11,6 @@ use axum::extract::{Extension, State};
 use axum::response::Response;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use axum_extra::TypedHeader;
-use axum_extra::headers::authorization::Bearer;
-use axum_extra::headers::{Authorization, Cookie};
 use std::sync::Arc;
 
 /// Defines the authentication routes for the application.

@@ -16,7 +16,7 @@ pub fn passkey_auth_routes() -> Router<Arc<AppState>> {
         .route("/register/finish", post(registration_finish_handler))
         .route("/login/start", post(login_start_handler))
         .route("/login/finish", post(login_finish_handler))
-        .route("/logout", get(logout_handler))
+        .route("/logout", get(logout_handler).delete(logout_handler))
 }
 
 /// Handles the start of the passkey registration process.
@@ -186,7 +186,10 @@ async fn login_finish_handler(
         .await
 }
 
-async fn logout_handler(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
+async fn logout_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
     // Call service method.
-    auth_service::logout(State(state)).await
+    auth_service::logout(State(state), headers).await
 }

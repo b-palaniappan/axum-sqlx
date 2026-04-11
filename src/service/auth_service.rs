@@ -19,7 +19,7 @@ use crate::util::crypto_helper::{
 };
 use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -309,7 +309,7 @@ async fn generate_access_token(
     response.headers_mut().insert(
         axum::http::header::SET_COOKIE,
         format!(
-            "refresh_token={}; HttpOnly; Secure; SameSite=Strict; Max-Age={}",
+            "refresh_token={}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={}",
             refresh_token, REFRESH_TOKEN_EXPIRATION_SECS
         )
         .parse()
@@ -585,6 +585,61 @@ pub async fn get_jwks(State(state): State<Arc<AppState>>) -> Result<Response, Ap
     Ok((StatusCode::OK, Json(jwks)).into_response())
 }
 
+/// Invalidates all authentication tokens for a user and performs cleanup.
+///
+/// This function performs the core logout operations for a user by revoking all their
+/// refresh tokens in the database and removing their JWT token from the cache. It is
+/// designed to be resilient, continuing execution even if individual cleanup operations
+/// fail, to ensure the user receives a successful logout response.
+///
+/// # Logout Operations
+///
+/// 1. Looks up the user by their unique key
+/// 2. Revokes all active refresh tokens in the database
+/// 3. Deletes the JWT token identifier (JTI) from the cache
+/// 4. Returns a successful logout response
+///
+/// # Arguments
+///
+/// * `state` - The application state containing database connections and cache configuration.
+/// * `user_key` - The unique identifier for the user (typically extracted from a JWT token or refresh token).
+///
+/// # Returns
+///
+/// * `Result<Response, AppError>` - Always returns `Ok` with a logout response that includes:
+///   - HTTP 200 OK status
+///   - A JSON body with a success message
+///   - A `Set-Cookie` header that clears the `refresh_token` cookie
+///
+/// # Errors
+///
+/// This function does not return errors. All error conditions are logged and the function
+/// continues to completion, returning a successful logout response. This design ensures:
+/// - Users can always log out regardless of backend state
+/// - Prevents user enumeration attacks by not revealing whether a user exists
+/// - Graceful handling of partial failures (e.g., database or cache unavailable)
+///
+/// # Security Notes
+///
+/// - Returns success even if the user doesn't exist (prevents user enumeration)
+/// - Continues logout even if token revocation fails (ensures user gets logged out)
+/// - Invalidates both refresh tokens (database) and access tokens (cache)
+/// - Uses the same response format regardless of success or failure of individual operations
+///
+/// # Examples
+///
+/// This function is typically called from the `logout` route handler:
+/// ```ignore
+/// pub async fn logout(
+///     State(state): State<Arc<AppState>>,
+///     headers: HeaderMap,
+/// ) -> Result<Response, AppError> {
+///     if let Some(user_key) = extract_user_key_from_headers(&state, &headers).await {
+///         let _ = logout_user(State(state), user_key).await;
+///     }
+///     Ok(logout_response())
+/// }
+/// ```
 pub async fn logout_user(
     State(state): State<Arc<AppState>>,
     user_key: String,
@@ -596,13 +651,7 @@ pub async fn logout_user(
         Ok(user) => user,
         Err(_) => {
             // Even if user doesn't exist, return success to prevent user enumeration
-            return Ok((
-                StatusCode::OK,
-                Json(LogoutResponse {
-                    message: "Logout successful".to_string(),
-                }),
-            )
-                .into_response());
+            return Ok(logout_response());
         }
     };
 
@@ -621,13 +670,7 @@ pub async fn logout_user(
         // Continue with logout even if cache deletion fails
     }
 
-    Ok((
-        StatusCode::OK,
-        Json(LogoutResponse {
-            message: "Logout successful".to_string(),
-        }),
-    )
-        .into_response())
+    Ok(logout_response())
 }
 
 /// Generates a unique identifier for the public key.
@@ -772,22 +815,59 @@ pub async fn forgot_password(
 /// Resets a user's password using a valid reset token.
 ///
 /// This function performs the following steps:
-/// 1. Validates the reset token and new password
-/// 2. Verifies the token in the database
-/// 3. Hashes the new password
-/// 4. Updates the user's password in the database
-/// 5. Marks the token as used
-/// 6. Invalidates any active refresh tokens and JWT tokens
+/// 1. Validates the reset token and new password format
+/// 2. Verifies the password and confirm password match
+/// 3. Validates password complexity requirements
+/// 4. Verifies the reset token in the database
+/// 5. Hashes the new password with Argon2 and HMAC
+/// 6. Updates the user's password in the database
+/// 7. Marks the reset token as used
+/// 8. Invalidates all active refresh tokens for the user
+/// 9. Removes the JWT token from cache
 ///
 /// # Arguments
 ///
-/// * `state` - The application state containing database connections.
-/// * `reset_password_request` - The request containing the reset token and new password.
+/// * `state` - The application state containing database connections and cryptographic keys.
+/// * `reset_password_request` - The request containing:
+///   - `token` - The password reset token sent to the user's email
+///   - `new_password` - The new password to set
+///   - `confirm_password` - Confirmation of the new password (must match `new_password`)
 ///
 /// # Returns
 ///
-/// * `Result<Response, AppError>` - Returns a success message if the password is reset successfully,
-///   or an error if the token is invalid or the request is malformed.
+/// * `Result<Response, AppError>` - Returns an HTTP response:
+///   - On success: HTTP 200 OK with a JSON message "Password has been reset successfully."
+///   - On error: An `AppError` with appropriate error type and message
+///
+/// # Errors
+///
+/// This function will return an `AppError` if:
+/// * The request validation fails (invalid format) - Returns `RequestValidationError`
+/// * The new password and confirm password don't match - Returns `BadRequest`
+/// * The password doesn't meet complexity requirements - Returns `BadRequest`
+///   - Must contain at least 1 uppercase letter
+///   - Must contain at least 1 lowercase letter
+///   - Must contain at least 1 number
+///   - Must contain at least 1 special character from: `!@#$%^&*()_+-=[]{}|;':",.<>?/`~`
+/// * The reset token is invalid or expired - Returns `UnauthorizedError`
+/// * The user cannot be found in the database - Returns `InternalServerError`
+/// * There is an error hashing the password - Returns `InternalServerError`
+/// * There is an error updating the password in the database - Returns `InternalServerError`
+///
+/// # Security Notes
+///
+/// - Uses Argon2 for password hashing with HMAC for additional protection
+/// - Invalidates all refresh tokens to force re-authentication on all devices
+/// - Clears cached JWT tokens to immediately revoke access
+/// - Marks the reset token as used to prevent reuse
+/// - Continues execution even if token cleanup fails to ensure password is reset
+///
+/// # Examples
+///
+/// This function is typically used as an Axum route handler:
+/// ```ignore
+/// .route("/auth/reset-password", post(reset_password))
+/// ```
 pub async fn reset_password(
     State(state): State<Arc<AppState>>,
     Json(reset_password_request): Json<ResetPasswordRequest>,
@@ -895,19 +975,81 @@ pub async fn reset_password(
         .into_response())
 }
 
-/**
-*
-* Registration Flow:
-* 1. User provides email address, first name, last name only.
-* 2. If the email exists, then return the existing user ID as `exclude_credentials` and send the response.
-* 3. If the email does not exist, generate a new user ID and store it in the database.
-* 4. Generate a passkey registration challenge and store it in cache with a TTL.
-* 5. Return the challenge to the user for registration.
-* FINISH REGISTRATION
-* 6. User completes the registration by providing the public key credential.
-* 7. Store the public key in the DB and complete the registration.
-* 8. Request the user to complete the First Name and Last Name, Update the DB with contact info.
-*/
+/// Initiates the passkey registration process for a new or existing user.
+///
+/// This function is the first step of the WebAuthn passkey registration flow. It handles both
+/// new user creation and additional passkey registration for existing users. The function
+/// generates a WebAuthn registration challenge, caches the registration state, and returns
+/// the challenge to the client for completion.
+///
+/// # Registration Flow
+///
+/// 1. Generates a unique registration request ID with prefix "r_"
+/// 2. Checks if a user with the provided email already exists
+/// 3. **For existing users:**
+///    - Retrieves their existing passkey credentials
+///    - Adds them to the `exclude_credentials` list to prevent duplicate registration
+/// 4. **For new users:**
+///    - Creates a new user record in the database with the provided first name, last name, and email
+/// 5. Initiates the WebAuthn passkey registration challenge using the `exclude_credentials` list
+/// 6. Caches the registration state (user key and registration state) with a 15-minute TTL
+/// 7. Returns the public key challenge and request ID to the client
+///
+/// # Arguments
+///
+/// * `state` - The application state containing database connections and WebAuthn configuration.
+/// * `passkey_registration_request` - The registration request containing:
+///   - `email` - The user's email address (used as both user ID and display name)
+///   - `first_name` - The user's first name
+///   - `last_name` - The user's last name
+///
+/// # Returns
+///
+/// * `Result<Response, AppError>` - Returns an HTTP response containing:
+///   - HTTP 200 OK status
+///   - A JSON body with:
+///     - `publicKey` - The WebAuthn credential creation options for the client
+///     - `requestId` - A unique identifier for this registration request (must be used in `finish_registration`)
+///
+/// The client must use the `publicKey` challenge with the browser's WebAuthn API to create
+/// a credential, then submit the result to `finish_registration` along with the `requestId`.
+///
+/// # Errors
+///
+/// This function will return an `AppError` if:
+/// * There is an error checking for existing user - Logs error and continues (sets `exclude_credentials` to `None`)
+/// * There is an error retrieving existing passkey credentials for a user - Returns `InternalServerError`
+/// * There is an error creating a new user in the database - Returns `InternalServerError`
+///   with message "Failed to create user. Please try again later."
+/// * The WebAuthn library fails to start passkey registration - Returns `InternalServerError`
+///   with message "Something went wrong. Please try again later."
+/// * There is an error caching the registration state - Returns `InternalServerError`
+///
+/// # Security Notes
+///
+/// - The registration state is cached with a 15-minute expiration to prevent replay attacks
+/// - Existing credentials are excluded from re-registration to prevent duplicate passkeys
+/// - A unique passkey ID (UUID) is generated for each registration attempt
+/// - The user key is generated using nanoid for uniqueness and security
+///
+/// # Database Operations
+///
+/// - **For new users:** Creates a user record with status `Active` by default
+/// - **For existing users:** No database writes occur in this step (only reads)
+/// - The registration state is temporarily stored in Valkey cache (not the database)
+///
+/// # Examples
+///
+/// This function is typically used as an Axum route handler:
+/// ```ignore
+/// .route("/auth/passkey/register/start", post(start_registration))
+/// ```
+///
+/// The client flow would be:
+/// 1. Call this `start_registration` endpoint with email, first name, and last name
+/// 2. Receive the WebAuthn challenge and request ID
+/// 3. Use the browser's `navigator.credentials.create()` with the challenge
+/// 4. Call `finish_registration` with the created credential and request ID
 pub async fn start_registration(
     State(state): State<Arc<AppState>>,
     Json(passkey_registration_request): Json<PasskeyRegistrationRequest>,
@@ -1014,7 +1156,64 @@ pub async fn start_registration(
     Ok((StatusCode::OK, res).into_response())
 }
 
-// Finish Registration.
+/// Completes the passkey registration process and stores the credential in the database.
+///
+/// This function is the second step of the WebAuthn passkey registration flow. It retrieves
+/// the registration state from the cache using the provided request ID, verifies the public key
+/// credential submitted by the client, and upon successful verification, stores the passkey
+/// credential in the database to complete the user registration.
+///
+/// # Registration Flow
+///
+/// 1. Retrieves the cached registration state (user key and passkey registration state) using the `request_id`
+/// 2. Fetches the user from the database using the cached user key
+/// 3. Verifies the public key credential using WebAuthn
+/// 4. Stores the verified passkey credential in the database
+/// 5. Cleans up the registration state from cache
+/// 6. Returns a success response (HTTP 204 No Content)
+///
+/// # Arguments
+///
+/// * `state` - The application state containing database connections and WebAuthn configuration.
+/// * `request_id` - A unique identifier for this registration request, used to retrieve the cached registration state.
+///   This should match the `requestId` returned from the `start_registration` function.
+/// * `public_key_credential` - The public key credential created by the client's authenticator during registration,
+///   wrapped in a JSON extractor.
+///
+/// # Returns
+///
+/// * `Result<Response, AppError>` - Returns an HTTP response:
+///   - On success: HTTP 204 No Content (indicating successful registration completion)
+///   - On error: An `AppError` with appropriate error type and message
+///
+/// # Errors
+///
+/// This function will return an `AppError` if:
+/// * The registration state is not found in cache (expired or invalid `request_id`) - Returns `BadRequest`
+///   with message "Passkey Registration state not found or expired."
+/// * There is an error retrieving data from cache - Returns `InternalServerError`
+/// * The user cannot be found in the database using the cached user key - Returns `InternalServerError`
+/// * The WebAuthn library fails to verify the public key credential - Returns `InternalServerError`
+///   with message "Failed to complete registration. Please try again later."
+/// * There is an error storing the passkey credential in the database - Returns `InternalServerError`
+///
+/// # Security Notes
+///
+/// - The registration state is cached with a 15-minute TTL (set in `start_registration`)
+/// - The cached state is deleted after successful registration to prevent reuse
+/// - The WebAuthn library performs cryptographic verification of the credential before storage
+///
+/// # Examples
+///
+/// This function is typically used as an Axum route handler:
+/// ```ignore
+/// .route("/auth/passkey/register/finish", post(finish_registration))
+/// ```
+///
+/// The client flow would be:
+/// 1. Call `start_registration` to get the challenge
+/// 2. Use the browser's WebAuthn API to create a credential
+/// 3. Call this `finish_registration` endpoint with the credential and request ID
 pub async fn finish_registration(
     State(state): State<Arc<AppState>>,
     request_id: String,
@@ -1087,6 +1286,59 @@ pub async fn finish_registration(
     }
 }
 
+/// Initiates the passkey authentication process for a user.
+///
+/// This function is the first step of the WebAuthn passkey authentication flow. It validates
+/// the user's existence, retrieves their registered passkey credentials, generates a WebAuthn
+/// authentication challenge, and caches the authentication state for verification in the
+/// subsequent step.
+///
+/// # Authentication Flow
+///
+/// 1. Generates a unique login request ID with prefix "l_"
+/// 2. Looks up the active user by email address
+/// 3. Retrieves all registered passkey credentials for the user
+/// 4. Converts stored credentials to `Passkey` objects for WebAuthn
+/// 5. Initiates the WebAuthn passkey authentication challenge
+/// 6. Caches the authentication state (user key and auth state) with a 15-minute TTL
+/// 7. Returns the public key challenge and request ID to the client
+///
+/// # Arguments
+///
+/// * `state` - The application state containing database connections and WebAuthn configuration.
+/// * `passkey_authentication_request` - The request containing the user's email address.
+///
+/// # Returns
+///
+/// * `Result<Response, AppError>` - Returns an HTTP response containing:
+///   - HTTP 200 OK status
+///   - A JSON body with the WebAuthn `publicKey` challenge object and a unique `requestId`
+///
+/// The `requestId` must be sent back to the server in the finish authentication request along
+/// with the signed credential from the authenticator.
+///
+/// # Errors
+///
+/// This function will return an `AppError` if:
+/// * The user is not found in the database - Returns `BadRequest` with "User not found."
+/// * There is an error retrieving the user from the database - Returns `InternalServerError`
+/// * There is an error fetching passkey credentials - Returns `InternalServerError`
+/// * No passkeys are registered for the user - Returns `BadRequest` with "No passkeys found for the user."
+/// * The WebAuthn library fails to start authentication - Returns `InternalServerError`
+/// * There is an error caching the authentication state - Returns `InternalServerError`
+///
+/// # Security Notes
+///
+/// - The authentication state is cached with a 15-minute expiration to prevent replay attacks
+/// - Only active users can authenticate
+/// - The function validates that at least one passkey credential exists before proceeding
+///
+/// # Examples
+///
+/// This function is typically used as an Axum route handler:
+/// ```ignore
+/// .route("/auth/passkey/start", post(start_authentication))
+/// ```
 pub async fn start_authentication(
     State(state): State<Arc<AppState>>,
     Json(passkey_authentication_request): Json<PasskeyAuthenticationRequest>,
@@ -1174,6 +1426,52 @@ pub async fn start_authentication(
     }
 }
 
+/// Completes the passkey authentication process and issues access and refresh tokens.
+///
+/// This function is the second step of the WebAuthn passkey authentication flow. It retrieves
+/// the authentication state from the cache using the provided request ID, verifies the public key
+/// credential submitted by the client, and upon successful verification, generates and returns
+/// JWT access and refresh tokens for the authenticated user.
+///
+/// # Authentication Flow
+///
+/// 1. Retrieves the cached authentication state using the `request_id`
+/// 2. Verifies the public key credential using WebAuthn
+/// 3. Fetches the user from the database using the cached user key
+/// 4. Cleans up the authentication state from cache
+/// 5. Generates a new refresh token and revokes any existing ones
+/// 6. Generates an access token (JWT) and caches its JTI
+/// 7. Returns the tokens to the client
+///
+/// # Arguments
+///
+/// * `state` - The application state containing database connections and WebAuthn configuration.
+/// * `request_id` - A unique identifier for this authentication request, used to retrieve the cached authentication state.
+/// * `public_key_credential` - The public key credential returned by the client's authenticator, wrapped in a JSON extractor.
+///
+/// # Returns
+///
+/// * `Result<Response, AppError>` - Returns an HTTP response containing:
+///   - HTTP 200 OK status
+///   - A JSON body with the access token, token type, and expiration time
+///   - A `Set-Cookie` header with the refresh token (HttpOnly, Secure, SameSite=Strict)
+///
+/// # Errors
+///
+/// This function will return an `AppError` if:
+/// * The authentication state is not found in cache (expired or invalid `request_id`) - Returns `BadRequest`
+/// * There is an error retrieving data from cache - Returns `InternalServerError`
+/// * The passkey authentication verification fails - Returns `InternalServerError`
+/// * The user cannot be found in the database - Returns `InternalServerError`
+/// * There is an error generating or persisting the refresh token - Returns `InternalServerError`
+/// * There is an error generating the access token or caching the JTI - Returns `InternalServerError`
+///
+/// # Examples
+///
+/// This function is typically used as an Axum route handler:
+/// ```ignore
+/// .route("/auth/passkey/finish", post(finish_authentication))
+/// ```
 pub async fn finish_authentication(
     State(state): State<Arc<AppState>>,
     request_id: String,
@@ -1238,9 +1536,171 @@ pub async fn finish_authentication(
     }
 }
 
-pub async fn logout(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
-    // This is a generic logout endpoint that does not require a request body.
-    // It simply returns a success message. If you want to clear cookies or tokens,
-    // you can add logic here as needed.
-    Ok((StatusCode::OK, "Logout successful").into_response())
+/// Handles user logout by invalidating tokens and clearing cookies.
+///
+/// This function performs a graceful logout by attempting to extract the user's key from
+/// the request headers (either from a Bearer token or refresh token cookie). If a user is
+/// identified, it revokes all refresh tokens and invalidates the cached JWT. The function
+/// always returns a successful logout response regardless of whether a user was found,
+/// which helps prevent user enumeration attacks.
+///
+/// # Arguments
+///
+/// * `state` - The application state containing database connections and configuration.
+/// * `headers` - The HTTP headers from the request, which may contain authentication tokens.
+///
+/// # Returns
+///
+/// * `Result<Response, AppError>` - Always returns `Ok` with a logout response that includes:
+///   - HTTP 200 OK status
+///   - A JSON success message
+///   - A `Set-Cookie` header that clears the `refresh_token` cookie
+///
+/// # Examples
+///
+/// This function is typically used as an Axum route handler:
+/// ```ignore
+/// .route("/logout", post(logout))
+/// ```
+pub async fn logout(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    if let Some(user_key) = extract_user_key_from_headers(&state, &headers).await {
+        let _ = logout_user(State(state), user_key).await;
+    }
+
+    Ok(logout_response())
+}
+
+/// Constructs a logout response that clears the refresh token cookie.
+///
+/// This function creates an HTTP response for a successful logout operation. It includes
+/// a JSON body with a success message and sets a `Set-Cookie` header to invalidate the
+/// `refresh_token` cookie by setting its `Max-Age` to 0.
+///
+/// The cookie is cleared with the following attributes:
+/// - `Path=/` - Applies to all paths
+/// - `HttpOnly` - Not accessible via JavaScript
+/// - `Secure` - Only transmitted over HTTPS
+/// - `SameSite=Strict` - Prevents cross-site request forgery
+/// - `Max-Age=0` - Immediately expires the cookie
+///
+/// # Returns
+///
+/// * `Response` - An HTTP response with status 200 OK, a JSON success message, and a
+///   `Set-Cookie` header that clears the refresh token.
+fn logout_response() -> Response {
+    let mut response = (
+        StatusCode::OK,
+        Json(LogoutResponse {
+            message: "Logout successful".to_string(),
+        }),
+    )
+        .into_response();
+
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        "refresh_token=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0"
+            .parse()
+            .unwrap(),
+    );
+
+    response
+}
+
+/// Extracts the user key from HTTP headers using either a Bearer token or a refresh token cookie.
+///
+/// This function provides a fallback mechanism for user identification by attempting two methods:
+/// 1. First, it tries to extract the user key from a JWT Bearer token in the `Authorization` header.
+/// 2. If no Bearer token is present, it attempts to extract a refresh token from the `Cookie` header,
+///    validates it against the database, and retrieves the associated user key.
+///
+/// This dual-method approach is useful for logout operations or other scenarios where authentication
+/// can be provided through either an access token or a refresh token.
+///
+/// # Arguments
+///
+/// * `state` - A reference to the application state, used to access the database connection pool and JWT public key.
+/// * `headers` - A reference to the `HeaderMap` containing the HTTP headers.
+///
+/// # Returns
+///
+/// * `Option<String>` - Returns `Some(String)` containing the user key if either:
+///   - A valid Bearer token is found and successfully decoded, or
+///   - A valid, active refresh token is found in cookies and the associated user exists in the database.
+///
+///   Returns `None` if:
+///   - No valid Bearer token or refresh token is found, or
+///   - The refresh token is invalid, expired, or not active, or
+///   - There is an error retrieving the user from the database.
+async fn extract_user_key_from_headers(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+) -> Option<String> {
+    if let Some(user_key) = extract_user_key_from_bearer(state, headers) {
+        return Some(user_key);
+    }
+
+    let refresh_token = extract_refresh_token_cookie(headers)?;
+    match auth_repository::get_refresh_token_by_value(&state.pg_pool, &refresh_token).await {
+        Ok((user_id, true, RefreshTokenStatus::Active)) => {
+            auth_repository::get_user_by_id(&state.pg_pool, &user_id)
+                .await
+                .ok()
+                .map(|user| user.key)
+        }
+        Ok(_) | Err(_) => None,
+    }
+}
+
+/// Extracts the user key (subject) from a JWT Bearer token in the HTTP Authorization header.
+///
+/// This function attempts to retrieve the `Authorization` header from the provided HTTP headers,
+/// checks if it contains a Bearer token, and then decodes the JWT using the application's public key.
+/// If the token is valid and can be decoded, it returns the `sub` (subject) claim from the token,
+/// which typically represents the user key.
+///
+/// # Arguments
+///
+/// * `state` - A reference to the application state, used to access the JWT public key.
+/// * `headers` - A reference to the `HeaderMap` containing the HTTP headers.
+///
+/// # Returns
+///
+/// * `Option<String>` - Returns `Some(String)` containing the user key if the Bearer token is present and valid, otherwise returns `None`.
+fn extract_user_key_from_bearer(state: &Arc<AppState>, headers: &HeaderMap) -> Option<String> {
+    let auth_header = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let token = auth_header.strip_prefix("Bearer ")?;
+
+    let mut validation = Validation::new(Algorithm::EdDSA);
+    validation.set_audience(&["api"]);
+
+    decode::<Claims>(
+        token,
+        &DecodingKey::from_ed_pem(state.jwt_public_key.expose_secret().as_bytes()).ok()?,
+        &validation,
+    )
+    .ok()
+    .map(|token_data| token_data.claims.sub)
+}
+
+/// Extracts the value of the `refresh_token` cookie from the HTTP headers.
+///
+/// This function searches the `COOKIE` header for a cookie named `refresh_token` and returns its value if found.
+///
+/// # Arguments
+///
+/// * `headers` - A reference to the `HeaderMap` containing the HTTP headers.
+///
+/// # Returns
+///
+/// * `Option<String>` - Returns `Some(String)` containing the value of the `refresh_token` cookie if present, otherwise returns `None`.
+fn extract_refresh_token_cookie(headers: &HeaderMap) -> Option<String> {
+    let cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
+
+    cookie_header.split(';').find_map(|cookie| {
+        let (name, value) = cookie.trim().split_once('=')?;
+        (name == "refresh_token").then(|| value.to_string())
+    })
 }

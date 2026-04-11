@@ -12,6 +12,8 @@ use crate::api::handler::welcome_handler::welcome_routes;
 use crate::config::app_config::{AppState, get_server_address, initialize_app_state};
 use crate::db::entity::user::AccountStatus;
 use crate::error::error_model::ApiError;
+use crate::grpc::user_registration_controller::UserRegistrationGrpcController;
+use crate::grpc::user_v1::user_registration_service_server::UserRegistrationServiceServer;
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::{from_fn, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
@@ -20,7 +22,7 @@ use opentelemetry::trace::TracerProvider;
 use sqlx::types::chrono::Utc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -39,6 +41,7 @@ mod db {
     pub(crate) mod repo;
 }
 mod error;
+mod grpc;
 mod middleware;
 mod observability;
 mod service;
@@ -249,6 +252,22 @@ async fn main() {
             "/js",
             ServeDir::new(assets_path.join("js")).precompressed_zstd(),
         )
+        .nest_service(
+            "/css",
+            ServeDir::new(assets_path.join("css")).precompressed_zstd(),
+        )
+        .route_service(
+            "/index.html",
+            ServeFile::new(assets_path.join("index.html")).precompressed_zstd(),
+        )
+        .route_service(
+            "/welcome.html",
+            ServeFile::new(assets_path.join("welcome.html")).precompressed_zstd(),
+        )
+        .route_service(
+            "/favicon.ico",
+            ServeFile::new(assets_path.join("favicon.ico")),
+        )
         .route_service(
             "/",
             ServeDir::new(assets_path.clone())
@@ -258,22 +277,43 @@ async fn main() {
         // Handle routes that are not found - apply after static files so they take precedence
         .fallback(page_not_found)
         .method_not_allowed_fallback(method_not_allowed)
-        .with_state(shared_state)
+        .with_state(shared_state.clone())
         .layer(from_fn(middleware::otel_middleware::trace_layer))
         .layer(CompressionLayer::new())
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .layer(cors);
 
-    // run it
+    // run REST server
     let server_address: SocketAddr = server_addr.parse().unwrap();
-    info!("Starting server at {}", server_addr);
+    info!("Starting REST server at {}", server_addr);
     let listener = tokio::net::TcpListener::bind(server_address).await.unwrap();
 
-    // Start server with graceful shutdown
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .unwrap();
+    // run gRPC server
+    let grpc_server_addr = std::env::var("GRPC_SERVER_ADDR")
+        .unwrap_or_else(|_| "0.0.0.0:50051".to_string())
+        .parse::<SocketAddr>()
+        .expect("Invalid GRPC_SERVER_ADDR, expected host:port");
+    let grpc_controller = UserRegistrationGrpcController::new(shared_state.clone());
+    let reflection_v1 = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(grpc::user_v1::FILE_DESCRIPTOR_SET)
+        .build_v1()
+        .expect("Failed to build gRPC reflection v1 service");
+    let reflection_v1alpha = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(grpc::user_v1::FILE_DESCRIPTOR_SET)
+        .build_v1alpha()
+        .expect("Failed to build gRPC reflection v1alpha service");
+    info!("Starting gRPC server at {}", grpc_server_addr);
+    let grpc_server = tonic::transport::Server::builder()
+        .add_service(reflection_v1)
+        .add_service(reflection_v1alpha)
+        .add_service(UserRegistrationServiceServer::new(grpc_controller))
+        .serve_with_shutdown(grpc_server_addr, shutdown_signal());
+
+    let rest_server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
+
+    let (rest_result, grpc_result) = tokio::join!(rest_server, grpc_server);
+    rest_result.unwrap();
+    grpc_result.unwrap();
 
     // Shutdown OTEL providers
     info!("Shutting down OpenTelemetry providers");

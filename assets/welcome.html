@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Welcome | Axum WebAuthn</title>
+  <link rel="stylesheet" href="./css/app.css">
+  <script src="./js/app.js"></script>
+</head>
+<body data-page="welcome">
+  <main class="welcome-card">
+    <span class="eyebrow">Authentication Complete</span>
+    <h1 class="title">Welcome back.</h1>
+    <p class="subtitle">Your passkey login succeeded and your access token is now stored in a browser cookie for this session.</p>
+
+    <section class="identity" aria-label="Signed in user">
+      <div>
+        <div class="identity-label">Signed in as</div>
+        <div id="welcomeEmail" class="identity-value">Authenticated user</div>
+      </div>
+      <a id="logoutLink" class="logout-link" href="./index.html">Logout</a>
+    </section>
+  </main>
+</body>
+</html>

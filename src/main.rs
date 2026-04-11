@@ -22,7 +22,7 @@ use opentelemetry::trace::TracerProvider;
 use sqlx::types::chrono::Utc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -251,6 +251,22 @@ async fn main() {
         .nest_service(
             "/js",
             ServeDir::new(assets_path.join("js")).precompressed_zstd(),
+        )
+        .nest_service(
+            "/css",
+            ServeDir::new(assets_path.join("css")).precompressed_zstd(),
+        )
+        .route_service(
+            "/index.html",
+            ServeFile::new(assets_path.join("index.html")).precompressed_zstd(),
+        )
+        .route_service(
+            "/welcome.html",
+            ServeFile::new(assets_path.join("welcome.html")).precompressed_zstd(),
+        )
+        .route_service(
+            "/favicon.ico",
+            ServeFile::new(assets_path.join("favicon.ico")),
         )
         .route_service(
             "/",
